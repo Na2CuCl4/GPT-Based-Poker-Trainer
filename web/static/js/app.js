@@ -3,6 +3,30 @@
    ============================================================ */
 "use strict";
 
+// ---------------------------------------------------------------------------
+// Client identity (persisted in localStorage)
+// ---------------------------------------------------------------------------
+function _getOrCreateClientId() {
+  let id = localStorage.getItem("pokerClientId");
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem("pokerClientId", id); }
+  return id;
+}
+const CLIENT_ID = _getOrCreateClientId();
+
+// ---------------------------------------------------------------------------
+// Fetch wrapper — injects X-Client-Id and Content-Type on every API call
+// ---------------------------------------------------------------------------
+function apiFetch(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Client-Id": CLIENT_ID,
+      ...(options.headers || {}),
+    },
+  });
+}
+
 let socket;
 const SHOW_STYLES = window.APP_CONFIG?.show_opponent_styles !== false;
 
@@ -13,7 +37,7 @@ const SEAT_POSITIONS = {
   2: [[23, 23], [77, 23]],
   3: [[23, 23], [50, 12], [77, 23]],
   4: [[12, 50], [23, 23], [77, 23], [88, 50]],
-  5: [[30, 70], [30, 30], [50, 12], [70, 30], [70, 70]],
+  5: [[20, 70], [20, 28], [50, 12], [80, 28], [80, 70]],
 };
 
 // ---------------------------------------------------------------------------
@@ -22,6 +46,22 @@ const SEAT_POSITIONS = {
 let gameState = null;
 let validActions = [];
 let raiseMin = 0, raiseMax = 1000;
+let _currentHandActions = [];
+
+// ---------------------------------------------------------------------------
+// localStorage helpers
+// ---------------------------------------------------------------------------
+const LS_HISTORY = "pokerHandHistory";
+const LS_CHIPS   = "pokerChips";
+
+function getHandHistory()         { return JSON.parse(localStorage.getItem(LS_HISTORY) || "[]"); }
+function getSavedChips()          { return parseInt(localStorage.getItem(LS_CHIPS) || "0", 10) || null; }
+function saveChips(chips)         { localStorage.setItem(LS_CHIPS, String(chips)); }
+function appendHandHistory(entry) {
+  const h = getHandHistory();
+  h.push(entry);
+  localStorage.setItem(LS_HISTORY, JSON.stringify(h));
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,6 +88,8 @@ function setActionButtonsEnabled(enabled) {
 function initSocket() {
   socket = io();
 
+  socket.on("connect", () => socket.emit("join_session", { client_id: CLIENT_ID }));
+
   socket.on("state_update", ({ state, valid_actions, street_changed }) => {
     gameState = state;
     validActions = valid_actions;
@@ -71,6 +113,20 @@ function initSocket() {
     logHandEnd(result, state);
     showHandResult(result, state);
     showNextHandButton();
+
+    const human = state.players.find(p => p.is_human);
+    if (human) {
+      saveChips(human.chips);
+      const won = (result.side_pot_results || []).some(p =>
+        (p.winners || []).includes(human.name));
+      appendHandHistory({
+        handNumber: state.hand_number,
+        won,
+        chipsAfter: human.chips,
+        myActions: [..._currentHandActions],
+      });
+      _currentHandActions = [];
+    }
     refreshStats();
   });
 
@@ -89,11 +145,16 @@ function initSocket() {
 async function startSession() {
   hideHint();
   clearLog();
+  _currentHandActions = [];
   document.getElementById("btn-next").style.display = "none";
   document.getElementById("result-modal").style.display = "none";
   document.getElementById("rit-modal").style.display = "none";
 
-  const res = await fetch("/api/session/start", { method: "POST" });
+  const savedChips = getSavedChips();
+  const res = await apiFetch("/api/session/start", {
+    method: "POST",
+    body: JSON.stringify({ starting_chips: savedChips }),
+  });
   const data = await res.json();
   if (data.error) { alert(data.error); return; }
 
@@ -111,10 +172,11 @@ async function startSession() {
 
 async function nextHand() {
   hideHint();
+  _currentHandActions = [];
   document.getElementById("btn-next").style.display = "none";
   closeModal();
 
-  const res = await fetch("/api/game/next-hand", { method: "POST" });
+  const res = await apiFetch("/api/game/next-hand", { method: "POST" });
   const data = await res.json();
   if (data.error) { alert(data.error); return; }
 
@@ -136,9 +198,8 @@ async function sendAction(action, amount = 0) {
   // Disable buttons immediately to prevent double-click
   setActionButtonsEnabled(false);
 
-  const res = await fetch("/api/game/action", {
+  const res = await apiFetch("/api/game/action", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, amount }),
   });
   const data = await res.json();
@@ -150,6 +211,7 @@ async function sendAction(action, amount = 0) {
   }
 
   addLog("你", action, amount);
+  _currentHandActions.push({ street: gameState?.street, action, amount });
 
   if (data.run_it_twice_pending) {
     // Waiting for run-it-twice socket event — keep buttons disabled
@@ -191,7 +253,7 @@ async function requestHint() {
   panel.style.display = "block";
   content.innerHTML = "<em style='color:#94a3b8'>正在获取建议…</em>";
 
-  const res = await fetch("/api/game/hint", { method: "POST" });
+  const res = await apiFetch("/api/game/hint", { method: "POST" });
   const hint = await res.json();
   if (hint.error) { content.textContent = hint.error; return; }
 
@@ -231,7 +293,6 @@ const STYLE_CN = {
 };
 
 function renderTable(state, revealAll = false) {
-  document.getElementById("hand-number").textContent = `第 ${state.hand_number} 手`;
   document.getElementById("pot-amount").textContent = state.pot;
   document.getElementById("street-label").textContent = STREET_CN[state.street] || state.street;
 
@@ -432,7 +493,7 @@ async function requestRunItTwiceHint() {
   content.innerHTML = "<em style='color:#94a3b8'>AI 思考中…</em>";
 
   try {
-    const res = await fetch("/api/game/run-it-twice-hint", { method: "POST" });
+    const res = await apiFetch("/api/game/run-it-twice-hint", { method: "POST" });
     const data = await res.json();
     if (data.error) {
       content.textContent = data.error;
@@ -456,9 +517,8 @@ async function submitRunItTwice(runTwice) {
   document.getElementById("rit-modal").style.display = "none";
   addLogRaw(`<span class="log-street">── ${runTwice ? "发两次" : "发一次"} ──</span>`);
 
-  await fetch("/api/game/run-it-twice", {
+  await apiFetch("/api/game/run-it-twice", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ run_twice: runTwice }),
   });
   // Result will arrive via hand_result socket event
@@ -520,7 +580,7 @@ async function requestAnalysis() {
   const loading = document.getElementById("analysis-loading");
   if (trigger) trigger.style.display = "none";
   if (loading) loading.style.display = "block";
-  await fetch("/api/game/analyze", { method: "POST" });
+  await apiFetch("/api/game/analyze", { method: "POST" });
   // Result arrives via hand_analysis socket event → appendAnalysisToModal
 }
 
@@ -594,24 +654,37 @@ function showNextHandButton() {
 }
 
 // ---------------------------------------------------------------------------
-// Stats
+// Stats (computed client-side from localStorage)
 // ---------------------------------------------------------------------------
-async function refreshStats() {
-  const res = await fetch("/api/stats");
-  const stats = await res.json();
-  if (stats.error) return;
-
+function refreshStats() {
+  const history = getHandHistory();
   const panel = document.getElementById("stats-panel");
-  panel.style.display = "block";
+  if (!history.length) { panel.style.display = "none"; return; }
 
+  const n = history.length;
+  const won = history.filter(h => h.won).length;
+  const vpip = history.filter(h =>
+    h.myActions?.some(a => a.street === "preflop" && ["call", "raise", "all_in"].includes(a.action))
+  ).length;
+  const pfr = history.filter(h =>
+    h.myActions?.some(a => a.street === "preflop" && ["raise", "all_in"].includes(a.action))
+  ).length;
   const pct = v => `${(v * 100).toFixed(1)}%`;
-  let html = `
-    <div class="stat-row"><span class="stat-label">胜率</span><span class="stat-value">${pct(stats.win_rate)}</span></div>
-    <div class="stat-row"><span class="stat-label">已玩手数</span><span class="stat-value">${stats.hands_played}</span></div>
-    <div class="stat-row"><span class="stat-label">VPIP</span><span class="stat-value">${pct(stats.vpip)}</span></div>
-    <div class="stat-row"><span class="stat-label">PFR</span><span class="stat-value">${pct(stats.pfr)}</span></div>
+
+  document.getElementById("stats-content").innerHTML = `
+    <div class="stat-row"><span class="stat-label">胜率</span><span class="stat-value">${pct(won / n)}</span></div>
+    <div class="stat-row"><span class="stat-label">已玩手数</span><span class="stat-value">${n}</span></div>
+    <div class="stat-row"><span class="stat-label">VPIP</span><span class="stat-value">${pct(vpip / n)}</span></div>
+    <div class="stat-row"><span class="stat-label">PFR</span><span class="stat-value">${pct(pfr / n)}</span></div>
   `;
-  document.getElementById("stats-content").innerHTML = html;
+  panel.style.display = "block";
+}
+
+function clearGameData() {
+  localStorage.removeItem(LS_HISTORY);
+  localStorage.removeItem(LS_CHIPS);
+  _currentHandActions = [];
+  refreshStats();
 }
 
 // ---------------------------------------------------------------------------
@@ -695,6 +768,7 @@ async function checkAuth() {
   const data = await res.json();
   if (data.authenticated) {
     document.getElementById("auth-overlay").style.display = "none";
+    refreshStats();
     initSocket();
   } else {
     document.getElementById("auth-input").focus();
@@ -712,6 +786,7 @@ async function submitAuth() {
   });
   if (res.ok) {
     document.getElementById("auth-overlay").style.display = "none";
+    refreshStats();
     initSocket();
   } else {
     errEl.style.display = "block";
