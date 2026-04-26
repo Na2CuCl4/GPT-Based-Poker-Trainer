@@ -512,3 +512,61 @@ body {
   margin-bottom: 8px; font-size: 1.1rem; text-align: center;
 }
 .auth-error { color: var(--red); font-size: 0.9rem; margin-bottom: 8px; }
+
+/* =========================================================
+   Config modal
+   ========================================================= */
+.config-section {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.config-section:last-of-type { border-bottom: none; }
+.config-label {
+  color: var(--gold); font-size: 0.85em; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;
+}
+.config-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 0;
+}
+.config-input {
+  width: 90px; padding: 5px 8px;
+  background: #243044; color: #fff;
+  border: 1px solid var(--panel-border); border-radius: 5px;
+  text-align: right; font-size: 1em;
+}
+.config-quick-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.config-quick-btns .btn { font-size: 0.82em; padding: 4px 10px; }
+.config-style-row {
+  display: flex; align-items: center; gap: 8px; padding: 4px 0;
+}
+.config-style-row > span:first-child { min-width: 40%; }
+.config-style-row select {
+  background: #243044; color: #fff;
+  border: 1px solid var(--panel-border); border-radius: 5px; padding: 4px 8px;
+}
+.config-chips-input { width: 75px; margin-left: auto; }
+/* Toggle switch */
+.toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0; background: #4a5568;
+  border-radius: 22px; cursor: pointer; transition: .2s;
+}
+.toggle-slider::before {
+  content: ""; position: absolute; width: 16px; height: 16px;
+  left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .2s;
+}
+.toggle input:checked + .toggle-slider { background: var(--gold); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+/* =========================================================
+   Responsive header — narrow screens (aspect-ratio < 3/4)
+   ========================================================= */
+@media (min-aspect-ratio: 3/4) {
+  .btn-icon { display: none; }
+}
+@media (max-aspect-ratio: 3/4) {
+  .btn-text { display: none; }
+}

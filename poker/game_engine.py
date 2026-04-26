@@ -34,6 +34,7 @@ class GameEngine:
 
         self.num_opponents: int = table_cfg.get("num_opponents", 3)
         self.starting_chips: int = table_cfg.get("starting_chips", 1000)
+        self.max_chips: int = table_cfg.get("max_chips") or (2 * self.starting_chips)
         self.small_blind: int = blinds_cfg.get("small_blind", 10)
         self.big_blind: int = blinds_cfg.get("big_blind", 20)
         self.ante: int = blinds_cfg.get("ante", 0)
@@ -118,14 +119,14 @@ class GameEngine:
             p.last_action_amount = 0
             p.acted_this_round = False
 
-        # Auto rebuy / cashout: keep all chips in [1, 2*starting]
+        # Auto rebuy / cashout: keep all chips in [1, max_chips]
         for p in s.players:
             if p.chips <= 0:
                 while p.chips <= 0:
                     p.chips += self.starting_chips
                     p.chip_adjustment -= 1
-            elif p.chips > 2 * self.starting_chips:
-                while p.chips > 2 * self.starting_chips:
+            elif p.chips > self.max_chips:
+                while p.chips > self.max_chips:
                     p.chips -= self.starting_chips
                     p.chip_adjustment += 1
             p.chips_before_hand = p.chips

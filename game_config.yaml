@@ -4,6 +4,7 @@ game:
 table:
   num_opponents: 5 # 2-5
   starting_chips: 2000
+  max_chips: 4000 # cashout upper bound; default = 2×starting_chips if omitted
 
 blinds:
   small_blind: 10

@@ -28,7 +28,6 @@ function apiFetch(url, options = {}) {
 }
 
 let socket;
-const SHOW_STYLES = window.APP_CONFIG?.show_opponent_styles !== false;
 
 // Seat positions [left%, top%] distributed around the 2:1 oval table.
 // Calculated at 75% oval radius (r=38%) from center, clockwise from bottom-left.
@@ -53,6 +52,7 @@ let _currentHandActions = [];
 // ---------------------------------------------------------------------------
 const LS_HISTORY = "pokerHandHistory";
 const LS_CHIPS   = "pokerChips";
+const LS_CONFIG  = "pokerGameConfig";
 
 function getHandHistory()         { return JSON.parse(localStorage.getItem(LS_HISTORY) || "[]"); }
 function getSavedChips()          { return parseInt(localStorage.getItem(LS_CHIPS) || "0", 10) || null; }
@@ -62,6 +62,27 @@ function appendHandHistory(entry) {
   h.push(entry);
   localStorage.setItem(LS_HISTORY, JSON.stringify(h));
 }
+
+function getGameConfig() {
+  const stored = localStorage.getItem(LS_CONFIG);
+  if (stored) { try { return JSON.parse(stored); } catch {} }
+  const ac = window.APP_CONFIG || {};
+  return {
+    game_mode:            ac.game_mode            ?? "cash",
+    num_opponents:        ac.num_opponents         ?? 5,
+    starting_chips:       ac.starting_chips        ?? 2000,
+    small_blind:          ac.small_blind           ?? 10,
+    big_blind:            ac.big_blind             ?? 20,
+    ante:                 ac.ante                  ?? 0,
+    hint_enabled:         ac.hint_enabled          ?? true,
+    post_hand_analysis:   ac.post_hand_analysis    ?? true,
+    show_opponent_styles: ac.show_opponent_styles  ?? true,
+    opponent_styles:      ac.opponent_styles       ?? ["random"],
+    run_it_twice:         ac.run_it_twice_enabled  ?? false,
+    max_chips:            ac.max_chips             ?? null,
+  };
+}
+function saveGameConfig(cfg) { localStorage.setItem(LS_CONFIG, JSON.stringify(cfg)); }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,9 +95,10 @@ function isHumanTurn(state) {
 
 /** Enable/disable ALL action buttons based on whether it's the human's turn. */
 function setActionButtonsEnabled(enabled) {
-  ["btn-fold", "btn-check", "btn-call", "btn-raise", "btn-allin", "btn-hint"].forEach(id => {
+  ["btn-fold", "btn-check", "btn-call", "btn-raise", "btn-allin"].forEach(id => {
     document.getElementById(id).disabled = !enabled;
   });
+  document.getElementById("btn-hint").disabled = !enabled || !getGameConfig().hint_enabled;
   if (!enabled) {
     document.getElementById("call-amount").textContent = "";
   }
@@ -150,10 +172,11 @@ async function startSession() {
   document.getElementById("result-modal").style.display = "none";
   document.getElementById("rit-modal").style.display = "none";
 
+  const cfg = getGameConfig();
   const savedChips = getSavedChips();
   const res = await apiFetch("/api/session/start", {
     method: "POST",
-    body: JSON.stringify({ starting_chips: savedChips }),
+    body: JSON.stringify({ ...cfg, starting_chips: savedChips ?? cfg.starting_chips }),
   });
   const data = await res.json();
   if (data.error) { alert(data.error); return; }
@@ -288,6 +311,7 @@ const STREET_CN = {
   preflop: "翻牌前", flop: "翻牌", turn: "转牌", river: "河牌", showdown: "摊牌"
 };
 const STYLE_CN = {
+  random: "随机",
   tight_aggressive: "紧凶", loose_aggressive: "松凶",
   tight_passive: "紧弱", loose_passive: "松弱", balanced: "均衡",
 };
@@ -387,7 +411,7 @@ function renderOpponents(players, dealerIdx, currentPlayerIdx, revealAll) {
     const betInfo = p.current_bet > 0
       ? `<span class="seat-bet"> | 下注: ${p.current_bet}</span>` : "";
 
-    const stylePart = SHOW_STYLES
+    const stylePart = getGameConfig().show_opponent_styles
       ? `<span style="font-size:.8em;color:#74b9ff"> [${STYLE_CN[p.style] || p.style}]</span>`
       : "";
 
@@ -436,7 +460,7 @@ function updateActions(actions) {
   setBtn("btn-fold",  !!byAction.fold);
   setBtn("btn-check", !!byAction.check);
   setBtn("btn-allin", !!byAction.all_in);
-  setBtn("btn-hint",  true);  // hint always enabled during human turn
+  setBtn("btn-hint",  getGameConfig().hint_enabled !== false);
 
   if (byAction.call) {
     setBtn("btn-call", true);
@@ -564,13 +588,13 @@ function showHandResult(result, state) {
   document.getElementById("result-body").innerHTML = bodyHtml;
   document.getElementById("result-reveal").innerHTML = revealHtml || "";
 
-  document.getElementById("analysis-body").innerHTML = `
+  document.getElementById("analysis-body").innerHTML = getGameConfig().post_hand_analysis ? `
     <hr style="border-color:#2d3f55;margin:12px 0"/>
     <div id="analysis-trigger">
       <button class="btn btn-secondary" onclick="requestAnalysis()" style="width:100%">🤖 AI 分析本局</button>
     </div>
     <div id="analysis-loading" style="display:none;color:#94a3b8;font-size:0.9rem">⏳ AI 正在分析本局…</div>
-  `;
+  ` : "";
 
   document.getElementById("result-modal").style.display = "flex";
 }
@@ -758,6 +782,136 @@ function toggleSidebar() {
 function closeSidebar() {
   document.querySelector(".side-panel").classList.remove("open");
   document.getElementById("sidebar-overlay").classList.remove("open");
+}
+
+// ---------------------------------------------------------------------------
+// Config modal
+// ---------------------------------------------------------------------------
+const _STYLE_OPTIONS = ["random", "tight_aggressive", "loose_aggressive", "tight_passive", "loose_passive", "balanced"];
+
+function openConfigModal() {
+  const cfg = getGameConfig();
+  const modeEl = document.querySelector(`input[name="cfg-mode"][value="${cfg.game_mode}"]`);
+  if (modeEl) modeEl.checked = true;
+  document.getElementById("cfg-num-opponents").value      = cfg.num_opponents;
+  document.getElementById("cfg-starting-chips").value    = cfg.starting_chips;
+  document.getElementById("cfg-small-blind").value       = cfg.small_blind;
+  document.getElementById("cfg-big-blind").value         = cfg.big_blind;
+  document.getElementById("cfg-ante").value              = cfg.ante;
+  document.getElementById("cfg-hint-enabled").checked    = cfg.hint_enabled;
+  document.getElementById("cfg-analysis-enabled").checked = cfg.post_hand_analysis;
+  document.getElementById("cfg-show-styles").checked     = cfg.show_opponent_styles;
+  document.getElementById("cfg-run-it-twice").checked    = cfg.run_it_twice;
+  document.getElementById("cfg-max-chips").value         = cfg.max_chips ?? "";
+  const playerChips = gameState?.players?.find(p => p.is_human)?.chips
+    ?? getSavedChips() ?? cfg.starting_chips;
+  const aiPlayers = gameState?.players?.filter(p => !p.is_human) ?? [];
+  const opponentChips = aiPlayers.length ? aiPlayers.map(p => p.chips) : null;
+  const opponentNames = aiPlayers.length ? aiPlayers.map(p => p.name) : null;
+  _renderPlayersList(cfg.num_opponents, cfg.opponent_styles, playerChips, opponentChips, opponentNames);
+  document.getElementById("config-modal").style.display = "flex";
+}
+
+function closeConfigModal() {
+  document.getElementById("config-modal").style.display = "none";
+}
+
+function onNumOpponentsChange(val) {
+  const n = Math.min(5, Math.max(2, parseInt(val) || 2));
+  const styles = Array.from({ length: n }, (_, i) =>
+    document.getElementById(`cfg-style-${i}`)?.value || "random"
+  );
+  const chips = Array.from({ length: n }, (_, i) =>
+    parseInt(document.getElementById(`cfg-chips-${i}`)?.value) || null
+  );
+  const playerChips = parseInt(document.getElementById("cfg-chips-player")?.value)
+    || gameState?.players?.find(p => p.is_human)?.chips
+    || getSavedChips() || getGameConfig().starting_chips;
+  const aiPlayers = gameState?.players?.filter(p => !p.is_human) ?? [];
+  const names = aiPlayers.length ? aiPlayers.map(p => p.name) : null;
+  _renderPlayersList(n, styles, playerChips, chips, names);
+}
+
+const _AI_NAMES = ["Alice", "Bob", "Charlie", "Diana", "Eve"];
+
+function _renderPlayersList(n, styles, playerChips, opponentChips, opponentNames) {
+  const container = document.getElementById("cfg-styles-list");
+  container.innerHTML = "";
+
+  const pr = document.createElement("div");
+  pr.className = "config-style-row";
+  pr.innerHTML = `<span>你 (玩家)</span>
+    <input type="number" id="cfg-chips-player" class="config-input config-chips-input"
+           min="1" step="100" value="${playerChips}" />`;
+  container.appendChild(pr);
+
+  for (let i = 0; i < n; i++) {
+    const style = (styles || [])[i] || "random";
+    const chips = (opponentChips || [])[i] ?? playerChips;
+    const name = (opponentNames || [])[i] || _AI_NAMES[i] || `对手 ${i + 1}`;
+    const row = document.createElement("div");
+    row.className = "config-style-row";
+    row.innerHTML = `<span>${name}</span>
+      <select id="cfg-style-${i}">
+        ${_STYLE_OPTIONS.map(s =>
+          `<option value="${s}"${s === style ? " selected" : ""}>${STYLE_CN[s] || s}</option>`
+        ).join("")}
+      </select>
+      <input type="number" id="cfg-chips-${i}" class="config-input config-chips-input"
+             min="1" step="100" value="${chips}" />`;
+    container.appendChild(row);
+  }
+}
+
+function setAllStyles(style) {
+  const n = parseInt(document.getElementById("cfg-num-opponents").value) || 2;
+  for (let i = 0; i < n; i++) {
+    const el = document.getElementById(`cfg-style-${i}`);
+    if (el) el.value = style;
+  }
+}
+
+async function saveConfig() {
+  const cfg = getGameConfig();
+  const n = Math.min(5, Math.max(2, parseInt(document.getElementById("cfg-num-opponents").value) || 2));
+  const styles = Array.from({ length: n }, (_, i) =>
+    document.getElementById(`cfg-style-${i}`)?.value || "random"
+  );
+  const playerChips = Math.max(1,
+    parseInt(document.getElementById("cfg-chips-player").value) || cfg.starting_chips);
+  const opponentChips = Array.from({ length: n }, (_, i) =>
+    Math.max(1, parseInt(document.getElementById(`cfg-chips-${i}`)?.value) || cfg.starting_chips));
+  const maxChipsRaw = parseInt(document.getElementById("cfg-max-chips").value);
+  const maxChips = maxChipsRaw > 0 ? maxChipsRaw : null;
+
+  saveGameConfig({
+    game_mode:            document.querySelector('input[name="cfg-mode"]:checked')?.value || "cash",
+    num_opponents:        n,
+    starting_chips:       Math.max(100,  parseInt(document.getElementById("cfg-starting-chips").value) || 2000),
+    small_blind:          Math.max(1,    parseInt(document.getElementById("cfg-small-blind").value)    || 10),
+    big_blind:            Math.max(1,    parseInt(document.getElementById("cfg-big-blind").value)      || 20),
+    ante:                 Math.max(0,    parseInt(document.getElementById("cfg-ante").value)           || 0),
+    hint_enabled:         document.getElementById("cfg-hint-enabled").checked,
+    post_hand_analysis:   document.getElementById("cfg-analysis-enabled").checked,
+    show_opponent_styles: document.getElementById("cfg-show-styles").checked,
+    opponent_styles:      styles,
+    run_it_twice:         document.getElementById("cfg-run-it-twice").checked,
+    max_chips:            maxChips,
+  });
+
+  if (gameState) {
+    const res = await apiFetch("/api/session/chips", {
+      method: "POST",
+      body: JSON.stringify({ player_chips: playerChips, opponent_chips: opponentChips }),
+    });
+    const data = await res.json();
+    if (data.state) { gameState = data.state; renderTable(gameState); }
+    saveChips(playerChips);
+  } else {
+    saveChips(playerChips);
+  }
+
+  closeConfigModal();
 }
 
 // ---------------------------------------------------------------------------

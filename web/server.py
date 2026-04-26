@@ -18,7 +18,6 @@ from ai.advisor import GPTAdvisor
 from ai.opponent import GPTOpponent
 from ai.schemas import HandAnalysis
 from poker.game_engine import GameEngine
-from poker.game_state import GameState
 
 # ---------------------------------------------------------------------------
 # Per-user game session
@@ -28,6 +27,7 @@ class GameSession:
     engine: GameEngine
     advisor: GPTAdvisor
     opponents: dict
+    show_styles: bool = True
     lock: Lock = field(default_factory=Lock)
     rit_event: Event = field(default_factory=Event)
     rit_human_choice: bool | None = None
@@ -74,12 +74,22 @@ def create_app(config: dict):
     show_styles = config.get("training", {}).get("show_opponent_styles", True)
     run_it_twice_enabled = config.get("features", {}).get("run_it_twice", False)
     starting_chips = config.get("table", {}).get("starting_chips", 1000)
+    max_chips = config.get("table", {}).get("max_chips") or None
 
-    # Config subset passed to frontend via template
+    # Config subset passed to frontend via template (used as initial/default values)
     frontend_config = json.dumps({
         "show_opponent_styles": show_styles,
         "run_it_twice_enabled": run_it_twice_enabled,
-        "starting_chips": starting_chips,
+        "starting_chips":       starting_chips,
+        "max_chips":            max_chips,
+        "game_mode":            config.get("game",     {}).get("mode",              "cash"),
+        "num_opponents":        config.get("table",    {}).get("num_opponents",     3),
+        "small_blind":          config.get("blinds",   {}).get("small_blind",       10),
+        "big_blind":            config.get("blinds",   {}).get("big_blind",         20),
+        "ante":                 config.get("blinds",   {}).get("ante",              0),
+        "hint_enabled":         config.get("training", {}).get("hint_enabled",      True),
+        "post_hand_analysis":   config.get("training", {}).get("post_hand_analysis",True),
+        "opponent_styles":      config.get("training", {}).get("opponent_styles",   ["random"]),
     })
 
     # ------------------------------------------------------------------
@@ -132,7 +142,17 @@ def create_app(config: dict):
 
     @app.route("/")
     def index():
-        return render_template("index.html", frontend_config=frontend_config, starting_chips=starting_chips)
+        return render_template("index.html", frontend_config=frontend_config)
+
+    def _ci(val, default, lo=None, hi=None):
+        """Coerce to int with optional clamp; returns default on failure."""
+        try:
+            v = int(val)
+            if lo is not None: v = max(lo, v)
+            if hi is not None: v = min(hi, v)
+            return v
+        except (TypeError, ValueError):
+            return default
 
     @app.route("/api/session/start", methods=["POST"])
     @require_auth
@@ -142,25 +162,54 @@ def create_app(config: dict):
             return jsonify({"error": "缺少 X-Client-Id 请求头"}), 400
 
         data = request.get_json() or {}
-        client_chips = data.get("starting_chips")
+        bt  = _config.get("table",    {})
+        bb  = _config.get("blinds",   {})
+        btr = _config.get("training", {})
+        bf  = _config.get("features", {})
+        bg  = _config.get("game",     {})
+
         user_config = {
             **_config,
+            "game": {
+                **bg,
+                "mode": data.get("game_mode", bg.get("mode", "cash")),
+            },
             "table": {
-                **_config.get("table", {}),
-                "starting_chips": client_chips
-                    if isinstance(client_chips, int) and client_chips > 0
-                    else _config.get("table", {}).get("starting_chips", 1000),
+                **bt,
+                "num_opponents":  _ci(data.get("num_opponents"),  bt.get("num_opponents",  3), 2, 5),
+                "starting_chips": _ci(data.get("starting_chips"), bt.get("starting_chips", 1000), 1),
+                "max_chips":      _ci(data.get("max_chips"), 0) or None,
+            },
+            "blinds": {
+                **bb,
+                "small_blind": _ci(data.get("small_blind"), bb.get("small_blind", 10), 1),
+                "big_blind":   _ci(data.get("big_blind"),   bb.get("big_blind",   20), 1),
+                "ante":        _ci(data.get("ante"),        bb.get("ante",         0), 0),
+            },
+            "training": {
+                **btr,
+                "show_opponent_styles": bool(data.get("show_opponent_styles",
+                                                       btr.get("show_opponent_styles", True))),
+                "opponent_styles": data.get("opponent_styles")
+                    if isinstance(data.get("opponent_styles"), list)
+                    else btr.get("opponent_styles", ["random"]),
+            },
+            "features": {
+                **bf,
+                "run_it_twice": bool(data.get("run_it_twice", bf.get("run_it_twice", False))),
             },
         }
+        user_show_styles = user_config["training"]["show_opponent_styles"]
 
         engine = GameEngine(user_config)
-        advisor = GPTAdvisor(show_styles=show_styles)
+        advisor = GPTAdvisor(show_styles=user_show_styles)
         opponents = {
             p.idx: GPTOpponent(style=p.style)
             for p in engine.state.players
             if not p.is_human
         }
-        session = GameSession(engine=engine, advisor=advisor, opponents=opponents)
+        session = GameSession(engine=engine, advisor=advisor, opponents=opponents,
+                              show_styles=user_show_styles)
 
         with _sessions_lock:
             _sessions[client_id] = session
@@ -174,6 +223,32 @@ def create_app(config: dict):
             "state": engine.get_state_snapshot(),
             "valid_actions": engine.get_valid_actions_dict(),
         })
+
+    @app.route("/api/session/chips", methods=["POST"])
+    @require_auth
+    def api_adjust_chips():
+        client_id = _get_client_id()
+        if not client_id:
+            return jsonify({"error": "缺少 X-Client-Id 请求头"}), 400
+        with _sessions_lock:
+            session = _sessions.get(client_id)
+        if not session:
+            return jsonify({"error": "没有活跃的游戏会话"}), 400
+
+        data = request.get_json() or {}
+        with session.lock:
+            players = session.engine.state.players
+            if (pc := _ci(data.get("player_chips"), 0, 1)) > 0:
+                human = next((p for p in players if p.is_human), None)
+                if human:
+                    human.chips = pc
+            ai_players = [p for p in players if not p.is_human]
+            for i, val in enumerate(data.get("opponent_chips") or []):
+                if i < len(ai_players):
+                    if (oc := _ci(val, 0, 1)) > 0:
+                        ai_players[i].chips = oc
+
+        return jsonify({"state": session.engine.get_state_snapshot()})
 
     @app.route("/api/game/action", methods=["POST"])
     @require_auth
@@ -362,7 +437,7 @@ def create_app(config: dict):
             "players_info": [
                 {
                     "name": p.name,
-                    "style": p.style if show_styles else "未知",
+                    "style": p.style if session.show_styles else "未知",
                     "is_human": p.is_human,
                     "hole_cards": [str(c) for c in p.hole_cards],
                     "chips_after": p.chips,
