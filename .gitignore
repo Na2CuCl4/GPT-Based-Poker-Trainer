@@ -1,0 +1,11 @@
+# Claude
+.claude/
+
+# Python
+__pycache__/
+
+# Database
+*.db
+
+# Local Config
+config/game_config.yaml

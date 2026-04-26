@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>德州扑克训练器</title>
+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <!-- Inject server config for frontend use -->
+  <script>window.APP_CONFIG = {{ frontend_config | safe }};</script>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <h1>♠ 德州扑克训练器</h1>
+      <span id="hand-number" class="badge">第 0 手</span>
+    </div>
+    <div class="header-right">
+      <button id="btn-start" class="btn btn-primary" onclick="startSession()">开始游戏</button>
+      <button id="btn-sidebar" class="btn btn-secondary sidebar-toggle" onclick="toggleSidebar()">📋</button>
+    </div>
+  </header>
+
+  <div class="main-layout">
+    <!-- Poker Table -->
+    <div class="table-area">
+      <div class="poker-table">
+        <!-- AI opponents (top arc) -->
+        <div class="opponents-arc" id="opponents-arc"></div>
+
+        <!-- Community cards -->
+        <div class="community-area">
+          <div class="table-center-info">
+            <span id="street-label" class="street-label">等待开始</span>
+            <span class="pot-center-sep">|</span>
+            <span class="pot-center-label">底池</span>
+            <span id="pot-amount" class="pot-center-value">0</span>
+          </div>
+          <div id="community-cards" class="card-row"></div>
+        </div>
+
+        <!-- Player (bottom) -->
+        <div class="seat player-seat" id="player-seat"></div>
+      </div>
+
+      <!-- Action bar -->
+      <div class="action-bar" id="action-bar">
+        <button id="btn-fold"  class="btn btn-danger"    onclick="sendAction('fold')"  disabled>弃牌</button>
+        <button id="btn-check" class="btn btn-secondary" onclick="sendAction('check')" disabled>让牌</button>
+        <button id="btn-call"  class="btn btn-info"      onclick="sendAction('call')"  disabled>
+          跟注 <span id="call-amount"></span>
+        </button>
+        <div class="raise-group">
+          <button id="btn-raise" class="btn btn-warning" onclick="sendRaise()" disabled>加注</button>
+          <input type="range" id="raise-slider" min="0" max="1000" value="0"
+                 oninput="onSliderChange(this.value)" />
+          <input type="number" id="raise-input" class="raise-input" value="0"
+                 oninput="onRaiseInputChange(this.value)" />
+        </div>
+        <button id="btn-allin" class="btn btn-danger"   onclick="sendAction('all_in')" disabled>全押</button>
+        <button id="btn-hint"  class="btn btn-success hint-btn" onclick="requestHint()" disabled>💡 建议</button>
+        <button id="btn-next"  class="btn btn-primary"  onclick="nextHand()" style="display:none">下一手</button>
+      </div>
+    </div>
+
+    <!-- Right panel: AI hint + stats + log -->
+    <aside class="side-panel">
+      <div class="panel-card" id="hint-panel" style="display:none">
+        <h3>💡 AI 建议</h3>
+        <div id="hint-content"></div>
+      </div>
+
+      <div class="panel-card" id="stats-panel" style="display:none">
+        <h3>📊 统计数据</h3>
+        <div id="stats-content"></div>
+      </div>
+
+      <div class="panel-card" id="log-panel">
+        <h3>📋 行动记录</h3>
+        <ul id="action-log" class="action-log"></ul>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Hand result modal -->
+  <div id="result-modal" class="modal" style="display:none">
+    <div class="modal-content">
+      <h2>本局结果</h2>
+      <!-- winner + community cards -->
+      <div id="result-body"></div>
+      <!-- player hole cards reveal -->
+      <div id="result-reveal"></div>
+      <!-- AI analysis (populated async) -->
+      <div id="analysis-body">
+        <hr style="border-color:#2d3f55;margin:12px 0"/>
+        <div id="analysis-loading" style="color:#94a3b8;font-size:0.9rem">⏳ AI 正在分析本局…</div>
+      </div>
+      <div style="margin-top:16px">
+        <button class="btn btn-primary" onclick="closeModal(); nextHand()">下一手</button>
+        <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run-it-twice dialog -->
+  <div id="rit-modal" class="modal" style="display:none">
+    <div class="modal-content" style="max-width:480px">
+      <h2>🃏 双方均已全押！</h2>
+      <p style="color:#94a3b8;margin:8px 0 16px">发两次可以降低方差，将底池分两次结算。</p>
+
+      <div id="rit-ai-decision" style="background:#1a2a3a;border-radius:8px;padding:12px;margin-bottom:16px">
+        <div style="font-size:0.9rem;color:#74b9ff">对手的选择：</div>
+        <div id="rit-ai-choice" style="font-size:1.1rem;font-weight:bold;margin:4px 0"></div>
+        <div id="rit-ai-reason" style="font-size:0.85rem;color:#94a3b8"></div>
+      </div>
+
+      <div style="margin-bottom:16px">
+        <div style="font-size:0.9rem;color:#94a3b8;margin-bottom:8px">
+          注意：只有双方都同意，才会发两次。
+        </div>
+        <button id="rit-hint-btn" class="btn btn-secondary" onclick="requestRunItTwiceHint()"
+                style="margin-bottom:8px;width:100%">
+          💡 咨询 AI 建议
+        </button>
+        <div id="rit-hint-content" style="display:none;background:#1a2a3a;border-radius:8px;padding:10px;margin-bottom:8px;font-size:0.9rem"></div>
+      </div>
+
+      <div style="display:flex;gap:12px">
+        <button class="btn btn-secondary" style="flex:1" onclick="submitRunItTwice(false)">发一次</button>
+        <button class="btn btn-primary"   style="flex:1" onclick="submitRunItTwice(true)">发两次</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="sidebar-overlay" class="sidebar-overlay" onclick="closeSidebar()"></div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
