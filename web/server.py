@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import json
+import secrets
 import time
+from datetime import timedelta
+from functools import wraps
+from pathlib import Path
 from threading import Lock, Event
 
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, session as flask_session
 from flask_socketio import SocketIO
 
 from ai import gpt_client
@@ -35,12 +39,25 @@ _rit_pending: bool = False
 _rit_lock = Lock()
 
 
+def _get_secret_key() -> str:
+    key_file = Path(__file__).parent.parent / ".secret_key"
+    if key_file.exists():
+        return key_file.read_text().strip()
+    key = secrets.token_hex(32)
+    key_file.write_text(key)
+    return key
+
+
 def create_app(config: dict):
     global _config
     _config = config
 
+    passwords: list = config.get("auth", {}).get("passwords", [])
+    auth_required = bool(passwords)
+
     app = Flask(__name__, template_folder="templates", static_folder="static")
-    app.config["SECRET_KEY"] = "poker-trainer-secret"
+    app.config["SECRET_KEY"] = _get_secret_key()
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=365)
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
     try:
@@ -62,6 +79,36 @@ def create_app(config: dict):
     })
 
     # ------------------------------------------------------------------
+    # Auth
+    # ------------------------------------------------------------------
+
+    def require_auth(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if auth_required and not flask_session.get("authenticated"):
+                return jsonify({"error": "未授权"}), 401
+            return f(*args, **kwargs)
+        return decorated
+
+    @app.route("/api/auth/status", methods=["GET"])
+    def api_auth_status():
+        if not auth_required:
+            return jsonify({"authenticated": True, "required": False})
+        return jsonify({
+            "authenticated": bool(flask_session.get("authenticated")),
+            "required": True,
+        })
+
+    @app.route("/api/auth", methods=["POST"])
+    def api_auth():
+        pwd = (request.get_json() or {}).get("password", "")
+        if pwd in passwords:
+            flask_session.permanent = True
+            flask_session["authenticated"] = True
+            return jsonify({"ok": True})
+        return jsonify({"error": "密码错误"}), 401
+
+    # ------------------------------------------------------------------
     # REST API
     # ------------------------------------------------------------------
 
@@ -70,6 +117,7 @@ def create_app(config: dict):
         return render_template("index.html", frontend_config=frontend_config, starting_chips=starting_chips)
 
     @app.route("/api/session/start", methods=["POST"])
+    @require_auth
     def api_start_session():
         global _engine, _advisor, _opponents, _session_id, _current_hand_id
         with _lock:
@@ -97,6 +145,7 @@ def create_app(config: dict):
         })
 
     @app.route("/api/game/action", methods=["POST"])
+    @require_auth
     def api_action():
         if _engine is None:
             return jsonify({"error": "游戏未开始"}), 400
@@ -138,6 +187,7 @@ def create_app(config: dict):
         })
 
     @app.route("/api/game/run-it-twice", methods=["POST"])
+    @require_auth
     def api_run_it_twice():
         """Receive human's run-it-twice choice and signal the waiting background task."""
         global _rit_human_choice
@@ -151,6 +201,7 @@ def create_app(config: dict):
         return jsonify({"ok": True})
 
     @app.route("/api/game/run-it-twice-hint", methods=["POST"])
+    @require_auth
     def api_run_it_twice_hint():
         """Advisor hint for run-it-twice decision."""
         if _engine is None or _advisor is None:
@@ -163,6 +214,7 @@ def create_app(config: dict):
         return jsonify(advice.model_dump())
 
     @app.route("/api/game/hint", methods=["POST"])
+    @require_auth
     def api_hint():
         if _engine is None or _advisor is None:
             return jsonify({"error": "游戏未开始"}), 400
@@ -175,6 +227,7 @@ def create_app(config: dict):
         return jsonify(hint.model_dump())
 
     @app.route("/api/game/next-hand", methods=["POST"])
+    @require_auth
     def api_next_hand():
         global _current_hand_id
         if _engine is None:
@@ -190,6 +243,7 @@ def create_app(config: dict):
         })
 
     @app.route("/api/game/analyze", methods=["POST"])
+    @require_auth
     def api_analyze():
         """User-triggered: start GPT hand analysis for the last completed hand."""
         if _pending_analysis is None:
@@ -202,6 +256,7 @@ def create_app(config: dict):
         return jsonify({"ok": True})
 
     @app.route("/api/stats", methods=["GET"])
+    @require_auth
     def api_stats():
         if _session_id is None:
             return jsonify({"error": "游戏未开始"}), 400
@@ -213,7 +268,8 @@ def create_app(config: dict):
 
     @socketio.on("connect")
     def on_connect():
-        pass
+        if auth_required and not flask_session.get("authenticated"):
+            return False
 
     # ------------------------------------------------------------------
     # Internal helpers

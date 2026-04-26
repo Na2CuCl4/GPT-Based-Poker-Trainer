@@ -9,3 +9,6 @@ __pycache__/
 
 # Local Config
 config/game_config.yaml
+
+# Secret Keys
+.secret_key

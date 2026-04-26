@@ -26,3 +26,7 @@ training:
 
 features:
   run_it_twice: true # true: offer run-it-twice when all-in; false: disable
+
+auth:
+  passwords: [] # 留空则禁用认证，填入密码后需要验证才能访问
+    # - "your-password-here"

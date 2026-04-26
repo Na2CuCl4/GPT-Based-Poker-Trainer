@@ -3,7 +3,7 @@
    ============================================================ */
 "use strict";
 
-const socket = io();
+let socket;
 const SHOW_STYLES = window.APP_CONFIG?.show_opponent_styles !== false;
 
 // Seat positions [left%, top%] distributed around the 2:1 oval table.
@@ -43,41 +43,45 @@ function setActionButtonsEnabled(enabled) {
 }
 
 // ---------------------------------------------------------------------------
-// Socket events
+// Socket init (called after auth)
 // ---------------------------------------------------------------------------
-socket.on("state_update", ({ state, valid_actions, street_changed }) => {
-  gameState = state;
-  validActions = valid_actions;
-  renderTable(state);
-  if (isHumanTurn(state)) {
-    updateActions(valid_actions);
-  } else {
+function initSocket() {
+  socket = io();
+
+  socket.on("state_update", ({ state, valid_actions, street_changed }) => {
+    gameState = state;
+    validActions = valid_actions;
+    renderTable(state);
+    if (isHumanTurn(state)) {
+      updateActions(valid_actions);
+    } else {
+      setActionButtonsEnabled(false);
+    }
+    if (street_changed) logStreet(state.street);
+  });
+
+  socket.on("ai_action", ({ player_name, action, amount }) => {
+    addLog(player_name, action, amount);
+  });
+
+  socket.on("hand_result", ({ state, result }) => {
+    gameState = state;
+    renderTable(state, true);
     setActionButtonsEnabled(false);
-  }
-  if (street_changed) logStreet(state.street);
-});
+    logHandEnd(result, state);
+    showHandResult(result, state);
+    showNextHandButton();
+    refreshStats();
+  });
 
-socket.on("ai_action", ({ player_name, action, amount }) => {
-  addLog(player_name, action, amount);
-});
+  socket.on("hand_analysis", ({ analysis }) => {
+    appendAnalysisToModal(analysis);
+  });
 
-socket.on("hand_result", ({ state, result }) => {
-  gameState = state;
-  renderTable(state, true);
-  setActionButtonsEnabled(false);
-  logHandEnd(result, state);
-  showHandResult(result, state);
-  showNextHandButton();
-  refreshStats();
-});
-
-socket.on("hand_analysis", ({ analysis }) => {
-  appendAnalysisToModal(analysis);
-});
-
-socket.on("run_it_twice_prompt", ({ ai_run_twice, ai_reasoning }) => {
-  showRunItTwiceDialog(ai_run_twice, ai_reasoning);
-});
+  socket.on("run_it_twice_prompt", ({ ai_run_twice, ai_reasoning }) => {
+    showRunItTwiceDialog(ai_run_twice, ai_reasoning);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Session management
@@ -682,3 +686,38 @@ function closeSidebar() {
   document.querySelector(".side-panel").classList.remove("open");
   document.getElementById("sidebar-overlay").classList.remove("open");
 }
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+async function checkAuth() {
+  const res = await fetch("/api/auth/status");
+  const data = await res.json();
+  if (data.authenticated) {
+    document.getElementById("auth-overlay").style.display = "none";
+    initSocket();
+  } else {
+    document.getElementById("auth-input").focus();
+  }
+}
+
+async function submitAuth() {
+  const pwd = document.getElementById("auth-input").value;
+  const errEl = document.getElementById("auth-error");
+  errEl.style.display = "none";
+  const res = await fetch("/api/auth", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: pwd }),
+  });
+  if (res.ok) {
+    document.getElementById("auth-overlay").style.display = "none";
+    initSocket();
+  } else {
+    errEl.style.display = "block";
+    document.getElementById("auth-input").value = "";
+    document.getElementById("auth-input").focus();
+  }
+}
+
+checkAuth();

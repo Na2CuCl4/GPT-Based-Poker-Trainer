@@ -8,6 +8,18 @@
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
+  <!-- Auth overlay (hidden by JS after auth check) -->
+  <div id="auth-overlay" class="auth-overlay">
+    <div class="auth-box">
+      <h2>♠ 德州扑克训练器</h2>
+      <p style="color:var(--text-muted);margin:8px 0 16px">请输入访问密码</p>
+      <input type="password" id="auth-input" class="auth-input" placeholder="密码"
+             onkeydown="if(event.key==='Enter')submitAuth()" />
+      <div id="auth-error" class="auth-error" style="display:none">密码错误，请重试</div>
+      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="submitAuth()">进入</button>
+    </div>
+  </div>
+
   <!-- Inject server config for frontend use -->
   <script>window.APP_CONFIG = {{ frontend_config | safe }};</script>
 
