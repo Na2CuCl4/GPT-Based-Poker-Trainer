@@ -71,7 +71,7 @@ poker-ai/
 pip install -r requirements.txt
 ```
 
-### 2. 配置 `game_config.yaml`
+### 2. 配置 `config/game_config.yaml`
 
 ```yaml
 ai:
@@ -133,6 +133,7 @@ training:
 
 features:
   run_it_twice: true    # 双方全押时是否提供双次发牌选项
+  four_color_deck: true # true: 梅花绿色 + 方块蓝色；false: 传统双色（红 / 黑）
 
 auth:
   passwords: []         # 留空则不需要密码；填入后访问需要验证
@@ -153,7 +154,7 @@ auth:
 | 牌桌 | AI 对手数量、初始筹码、最大筹码上限 |
 | 盲注 | 小盲、大盲、前注 |
 | 训练功能 | 实时提示、赛后分析、显示对手风格 |
-| 功能 | 双次发牌 |
+| 功能 | 双次发牌、绿色梅花 / 蓝色方块（四色牌）|
 | 玩家的筹码与风格 | 各玩家当前筹码（立即生效）、各 AI 对手风格 |
 
 修改筹码并保存后，若当前有进行中的游戏，筹码会立即更新到桌面；若无游戏，保存的筹码将在下次"开始游戏"时作为初始值。
