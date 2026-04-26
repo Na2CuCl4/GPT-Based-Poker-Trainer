@@ -1,7 +1,13 @@
-"""Entry point for the Texas Hold'em poker trainer."""
+"""Development entry point for the Texas Hold'em poker trainer.
+
+For production (10-50 users), use Gunicorn instead:
+    gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 --timeout 120 wsgi:app
+"""
+import eventlet
+eventlet.monkey_patch()  # must be before all other imports
+
 import os
 import sys
-
 import yaml
 
 # Ensure project root is on sys.path when run as script
@@ -23,4 +29,4 @@ if __name__ == "__main__":
     print("  浏览器访问: http://localhost:5000")
     print("  按 Ctrl+C 退出")
     print("=" * 50)
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=False)
