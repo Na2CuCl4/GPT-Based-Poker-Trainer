@@ -1,11 +1,8 @@
-"""Production entry point for Gunicorn + Eventlet.
+"""Production entry point for Gunicorn + gthread.
 
 Usage:
-    gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 --timeout 120 wsgi:app
+    gunicorn --worker-class gthread -w 1 --threads 50 --bind 0.0.0.0:5000 --timeout 120 wsgi:app
 """
-import eventlet
-eventlet.monkey_patch()  # must be before all other imports
-
 import yaml
 from web.server import create_app
 

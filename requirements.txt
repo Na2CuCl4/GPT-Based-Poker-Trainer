@@ -4,5 +4,4 @@ flask
 flask-socketio
 treys
 pyyaml
-eventlet
 gunicorn

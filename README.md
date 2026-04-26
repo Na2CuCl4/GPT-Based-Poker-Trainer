@@ -91,10 +91,10 @@ python main.py
 
 **生产模式**（10~50 人并发）：
 ```bash
-gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 --timeout 120 wsgi:app
+gunicorn --worker-class gthread -w 1 --threads 50 --bind 0.0.0.0:5000 --timeout 120 wsgi:app
 ```
 
-> `-w 1` 是必须的：游戏 session 存储在进程内存中，多 worker 会导致请求路由到不同进程。Eventlet 绿色线程足以支撑几十个并发用户（瓶颈在 AI API 延迟，不在服务器并发）。
+> `-w 1` 是必须的：游戏 session 存储在进程内存中，多 worker 会导致请求路由到不同进程。`gthread` 使用标准 Python 线程，50 线程对应 50 个并发连接，无需 eventlet/gevent 等额外依赖。
 
 浏览器打开 `http://localhost:5000` 即可游戏。
 
