@@ -19,29 +19,11 @@
   --text-muted: #94a3b8;
   --btn-radius: 7px;
 
-  /* Card sizing — capped at 1/6 of viewport in both axes, aspect ratio preserved */
-  --card-w: min(62px, calc(100vw / 6), calc(100vh / 6 * 62 / 90));
+  /* Card sizing — capped at 1/8 of viewport in both axes, aspect ratio preserved */
+  --card-w: min(100px, calc(100vw / 8), calc(100vh / 8 * 62 / 90));
   --card-h: calc(var(--card-w) * 90 / 62);
-  --card-font: 1.35rem;
-  --card-suit-font: 1.5rem;
-}
-
-@media (min-width: 1600px) {
-  :root {
-    --card-w: min(76px, calc(100vw / 6), calc(100vh / 6 * 76 / 110));
-    --card-h: calc(var(--card-w) * 110 / 76);
-    --card-font: 1.7rem;
-    --card-suit-font: 1.9rem;
-  }
-}
-
-@media (min-width: 2200px) {
-  :root {
-    --card-w: min(96px, calc(100vw / 6), calc(100vh / 6 * 96 / 138));
-    --card-h: calc(var(--card-w) * 138 / 96);
-    --card-font: 2.1rem;
-    --card-suit-font: 2.3rem;
-  }
+  --card-font: calc(var(--card-w) * 0.5);
+  --card-suit-font: calc(var(--card-w) * 0.5);
 }
 
 body {
