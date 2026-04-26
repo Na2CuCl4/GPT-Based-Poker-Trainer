@@ -79,6 +79,7 @@ function getGameConfig() {
     show_opponent_styles: ac.show_opponent_styles  ?? true,
     opponent_styles:      ac.opponent_styles       ?? ["random"],
     run_it_twice:         ac.run_it_twice_enabled  ?? false,
+    four_color_deck:      ac.four_color_deck       ?? true,
     max_chips:            ac.max_chips             ?? null,
   };
 }
@@ -334,7 +335,7 @@ function renderTable(state, revealAll = false) {
       ? `<span class="seat-action-badge">${actionCN(human.last_action, human.last_action_amount)}</span>`
       : "";
     const betInfo = human.current_bet > 0
-      ? `<span class="seat-bet"> | 下注: ${human.current_bet}</span>` : "";
+      ? `<span class="seat-bet"> | 注: ${human.current_bet}</span>` : "";
     const actionLine = actionBadge || human.is_folded
       ? `${actionBadge}${human.is_folded ? `<span class="folded-label">已弃牌</span>` : ""}`
       : "";
@@ -345,7 +346,7 @@ function renderTable(state, revealAll = false) {
             ${getDisplayName(human)}${dealerMark}
           </span>
         </div>
-        <div><span class="seat-chips">筹码: ${human.chips}</span>${betInfo}</div>
+        <div><span class="seat-chips">码: ${human.chips}</span>${betInfo}</div>
       </div>
       <div class="card-row">${renderCardRow(human.hole_cards, true, human.is_folded)}</div>
       <div class="seat-action-row">${actionLine}</div>
@@ -372,7 +373,7 @@ function renderCardRow(cards, visible, folded = false) {
 function cardHtml(c, visible, folded = false) {
   if (!c || !visible) return `<div class="card-back"></div>`;
   const overlay = folded ? `<div class="card-fold-overlay"></div>` : "";
-  return `<div class="card ${c.color}">
+  return `<div class="card ${cardColor(c)}">
     <span class="card-rank">${c.rank === "T" ? "10" : c.rank}</span>
     <span class="card-suit">${suitUnicode(c.suit)}</span>
     ${overlay}
@@ -381,6 +382,13 @@ function cardHtml(c, visible, folded = false) {
 
 function suitUnicode(suit) {
   return { s: "♠", h: "♥", d: "♦", c: "♣" }[suit] || suit;
+}
+
+function cardColor(c) {
+  if (getGameConfig().four_color_deck !== false) return c.color;
+  if (c.suit === "d") return "red";
+  if (c.suit === "c") return "black";
+  return c.color;
 }
 
 function getDisplayName(p) {
@@ -409,7 +417,7 @@ function renderOpponents(players, dealerIdx, currentPlayerIdx, revealAll) {
       ? `<span class="seat-action-badge">${actionCN(p.last_action, p.last_action_amount)}</span>`
       : "";
     const betInfo = p.current_bet > 0
-      ? `<span class="seat-bet"> | 下注: ${p.current_bet}</span>` : "";
+      ? `<span class="seat-bet"> | 注: ${p.current_bet}</span>` : "";
 
     const stylePart = getGameConfig().show_opponent_styles
       ? `<span style="font-size:.8em;color:#74b9ff"> [${STYLE_CN[p.style] || p.style}]</span>`
@@ -431,7 +439,7 @@ function renderOpponents(players, dealerIdx, currentPlayerIdx, revealAll) {
               ${getDisplayName(p)}${dealerMark}
             </span>${stylePart}
           </div>
-          <div><span class="seat-chips">筹码: ${p.chips}</span>${betInfo}</div>
+          <div><span class="seat-chips">码: ${p.chips}</span>${betInfo}</div>
         </div>
         <div class="card-row">${cardHtmlStr}</div>
         <div class="seat-action-row">${actionLine}</div>
@@ -802,6 +810,7 @@ function openConfigModal() {
   document.getElementById("cfg-analysis-enabled").checked = cfg.post_hand_analysis;
   document.getElementById("cfg-show-styles").checked     = cfg.show_opponent_styles;
   document.getElementById("cfg-run-it-twice").checked    = cfg.run_it_twice;
+  document.getElementById("cfg-four-color").checked      = cfg.four_color_deck;
   document.getElementById("cfg-max-chips").value         = cfg.max_chips ?? "";
   const playerChips = gameState?.players?.find(p => p.is_human)?.chips
     ?? getSavedChips() ?? cfg.starting_chips;
@@ -896,6 +905,7 @@ async function saveConfig() {
     show_opponent_styles: document.getElementById("cfg-show-styles").checked,
     opponent_styles:      styles,
     run_it_twice:         document.getElementById("cfg-run-it-twice").checked,
+    four_color_deck:      document.getElementById("cfg-four-color").checked,
     max_chips:            maxChips,
   });
 

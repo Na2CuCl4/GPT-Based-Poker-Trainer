@@ -90,6 +90,7 @@ def create_app(config: dict):
         "hint_enabled":         config.get("training", {}).get("hint_enabled",      True),
         "post_hand_analysis":   config.get("training", {}).get("post_hand_analysis",True),
         "opponent_styles":      config.get("training", {}).get("opponent_styles",   ["random"]),
+        "four_color_deck":      config.get("features", {}).get("four_color_deck",   True),
     })
 
     # ------------------------------------------------------------------

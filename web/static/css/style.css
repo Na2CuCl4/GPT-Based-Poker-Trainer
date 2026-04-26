@@ -19,8 +19,8 @@
   --text-muted: #94a3b8;
   --btn-radius: 7px;
 
-  /* Card sizing — capped at 1/7 of viewport in both axes, aspect ratio preserved */
-  --card-w: min(100px, calc(100vw / 7), calc(100vh / 7 * 62 / 90));
+  /* Card sizing — capped at 1/8 of viewport in both axes, aspect ratio preserved */
+  --card-w: min(100px, calc(100vw / 8), calc(100vh / 8 * 62 / 90));
   --card-h: calc(var(--card-w) * 90 / 62);
   --card-font: calc(var(--card-w) * 0.5);
   --card-suit-font: calc(var(--card-w) * 0.5);
