@@ -1,239 +1,476 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>德州扑克训练器</title>
-  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
-  <link rel="stylesheet" href="/static/css/style.css" />
-</head>
-<body>
-  <!-- Auth overlay (hidden by JS after auth check) -->
-  <div id="auth-overlay" class="auth-overlay">
-    <div class="auth-box">
-      <h2>♠ 德州扑克训练器</h2>
-      <p style="color:var(--text-muted);margin:8px 0 16px">请输入访问密码</p>
-      <input type="password" id="auth-input" class="auth-input" placeholder="密码"
-             onkeydown="if(event.key==='Enter')submitAuth()" />
-      <div id="auth-error" class="auth-error" style="display:none">密码错误，请重试</div>
-      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="submitAuth()">进入</button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>德州扑克训练器</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <!-- Auth overlay (hidden by JS after auth check) -->
+    <div id="auth-overlay" class="auth-overlay">
+      <div class="auth-box">
+        <h2>♠ 德州扑克训练器</h2>
+        <p style="color: var(--text-muted); margin: 8px 0 16px">
+          请输入访问密码
+        </p>
+        <input
+          type="password"
+          id="auth-input"
+          class="auth-input"
+          placeholder="密码"
+          onkeydown="if (event.key === 'Enter') submitAuth();"
+        />
+        <div id="auth-error" class="auth-error" style="display: none">
+          密码错误，请重试
+        </div>
+        <button
+          class="btn btn-primary"
+          style="width: 100%; margin-top: 4px"
+          onclick="submitAuth()"
+        >
+          进入
+        </button>
+      </div>
     </div>
-  </div>
 
-  <!-- Inject server config for frontend use -->
-  <script>window.APP_CONFIG = {{ frontend_config | safe }};</script>
+    <!-- Inject server config for frontend use -->
+    <script>
+      window.APP_CONFIG = {{ frontend_config | safe }};
+    </script>
 
-  <!-- Header -->
-  <header class="header">
-    <div class="header-left">
-      <h1><img class="logo-icon" src="/static/favicon.ico" alt="♠"><span class="title-text"> 德州扑克训练器</span></h1>
-    </div>
-    <div class="header-right">
-      <button id="btn-start" class="btn btn-primary" onclick="startSession()">
-        <span class="btn-icon">🎮</span><span class="btn-text">开始游戏</span>
-      </button>
-      <button class="btn btn-secondary" onclick="clearGameData()">
-        <span class="btn-icon">🗑️</span><span class="btn-text">清除数据</span>
-      </button>
-      <button class="btn btn-secondary" onclick="openConfigModal()">
-        <span class="btn-icon">⚙️</span><span class="btn-text">游戏配置</span>
-      </button>
-      <button id="btn-sidebar" class="btn btn-secondary sidebar-toggle" onclick="toggleSidebar()">📋</button>
-    </div>
-  </header>
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1>
+          <img class="logo-icon" src="/static/favicon.ico" alt="♠" /><span
+            class="title-text"
+          >
+            德州扑克训练器</span
+          >
+        </h1>
+      </div>
+      <div class="header-right">
+        <button id="btn-start" class="btn btn-primary" onclick="startSession()">
+          <span class="btn-icon">🎮</span><span class="btn-text">开始游戏</span>
+        </button>
+        <button class="btn btn-secondary" onclick="clearGameData()">
+          <span class="btn-icon">🗑️</span><span class="btn-text">清除数据</span>
+        </button>
+        <button class="btn btn-secondary" onclick="openConfigModal()">
+          <span class="btn-icon">⚙️</span><span class="btn-text">游戏配置</span>
+        </button>
+        <button
+          id="btn-sidebar"
+          class="btn btn-secondary sidebar-toggle"
+          onclick="toggleSidebar()"
+        >
+          📋
+        </button>
+      </div>
+    </header>
 
-  <div class="main-layout">
-    <!-- Poker Table -->
-    <div class="table-area">
-      <div class="poker-table">
-        <!-- AI opponents (top arc) -->
-        <div class="opponents-arc" id="opponents-arc"></div>
+    <div class="main-layout">
+      <!-- Poker Table -->
+      <div class="table-area">
+        <div class="poker-table">
+          <!-- AI opponents (top arc) -->
+          <div class="opponents-arc" id="opponents-arc"></div>
 
-        <!-- Community cards -->
-        <div class="community-area">
-          <div class="table-center-info">
-            <span id="street-label" class="street-label">等待开始</span>
-            <span class="pot-center-sep">|</span>
-            <span class="pot-center-label">底池</span>
-            <span id="pot-amount" class="pot-center-value">0</span>
+          <!-- Community cards -->
+          <div class="community-area">
+            <div class="table-center-info">
+              <span id="street-label" class="street-label">等待开始</span>
+              <span class="pot-center-sep">|</span>
+              <span class="pot-center-label">底池</span>
+              <span id="pot-amount" class="pot-center-value">0</span>
+            </div>
+            <div id="community-cards" class="card-row"></div>
           </div>
-          <div id="community-cards" class="card-row"></div>
+
+          <!-- Player (bottom) -->
+          <div class="seat player-seat" id="player-seat"></div>
         </div>
 
-        <!-- Player (bottom) -->
-        <div class="seat player-seat" id="player-seat"></div>
+        <!-- Action bar -->
+        <div class="action-bar" id="action-bar">
+          <button
+            id="btn-fold"
+            class="btn btn-danger"
+            onclick="sendAction('fold')"
+            disabled
+          >
+            弃牌
+          </button>
+          <button
+            id="btn-check"
+            class="btn btn-secondary"
+            onclick="sendAction('check')"
+            disabled
+          >
+            过牌
+          </button>
+          <button
+            id="btn-call"
+            class="btn btn-info"
+            onclick="sendAction('call')"
+            disabled
+          >
+            跟注 <span id="call-amount"></span>
+          </button>
+          <div class="raise-group">
+            <button
+              id="btn-raise"
+              class="btn btn-warning"
+              onclick="sendRaise()"
+              disabled
+            >
+              加注
+            </button>
+            <input
+              type="range"
+              id="raise-slider"
+              min="0"
+              max="1000"
+              value="0"
+              oninput="onSliderChange(this.value)"
+            />
+            <input
+              type="number"
+              id="raise-input"
+              class="raise-input"
+              value="0"
+              oninput="onRaiseInputChange(this.value)"
+            />
+          </div>
+          <button
+            id="btn-allin"
+            class="btn btn-danger"
+            onclick="sendAction('all_in')"
+            disabled
+          >
+            全押
+          </button>
+          <button
+            id="btn-hint"
+            class="btn btn-success hint-btn"
+            onclick="requestHint()"
+            disabled
+          >
+            💡 建议
+          </button>
+          <button
+            id="btn-next"
+            class="btn btn-primary"
+            onclick="nextHand()"
+            style="display: none"
+          >
+            下一手
+          </button>
+        </div>
       </div>
 
-      <!-- Action bar -->
-      <div class="action-bar" id="action-bar">
-        <button id="btn-fold"  class="btn btn-danger"    onclick="sendAction('fold')"  disabled>弃牌</button>
-        <button id="btn-check" class="btn btn-secondary" onclick="sendAction('check')" disabled>让牌</button>
-        <button id="btn-call"  class="btn btn-info"      onclick="sendAction('call')"  disabled>
-          跟注 <span id="call-amount"></span>
-        </button>
-        <div class="raise-group">
-          <button id="btn-raise" class="btn btn-warning" onclick="sendRaise()" disabled>加注</button>
-          <input type="range" id="raise-slider" min="0" max="1000" value="0"
-                 oninput="onSliderChange(this.value)" />
-          <input type="number" id="raise-input" class="raise-input" value="0"
-                 oninput="onRaiseInputChange(this.value)" />
+      <!-- Right panel: AI hint + stats + log -->
+      <aside class="side-panel">
+        <div class="panel-card" id="hint-panel" style="display: none">
+          <h3>💡 AI 建议</h3>
+          <div id="hint-content"></div>
         </div>
-        <button id="btn-allin" class="btn btn-danger"   onclick="sendAction('all_in')" disabled>全押</button>
-        <button id="btn-hint"  class="btn btn-success hint-btn" onclick="requestHint()" disabled>💡 建议</button>
-        <button id="btn-next"  class="btn btn-primary"  onclick="nextHand()" style="display:none">下一手</button>
+
+        <div class="panel-card" id="stats-panel" style="display: none">
+          <h3>📊 统计数据</h3>
+          <div id="stats-content"></div>
+        </div>
+
+        <div class="panel-card" id="log-panel">
+          <h3>📋 行动记录</h3>
+          <ul id="action-log" class="action-log"></ul>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Hand result modal -->
+    <div id="result-modal" class="modal" style="display: none">
+      <div class="modal-content">
+        <h2>本局结果</h2>
+        <!-- winner + community cards -->
+        <div id="result-body"></div>
+        <!-- player hole cards reveal -->
+        <div id="result-reveal"></div>
+        <!-- AI analysis (populated async) -->
+        <div id="analysis-body"></div>
+        <div style="margin-top: 16px">
+          <button
+            class="btn btn-primary"
+            onclick="
+              closeModal();
+              nextHand();
+            "
+          >
+            下一手
+          </button>
+          <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+        </div>
       </div>
     </div>
 
-    <!-- Right panel: AI hint + stats + log -->
-    <aside class="side-panel">
-      <div class="panel-card" id="hint-panel" style="display:none">
-        <h3>💡 AI 建议</h3>
-        <div id="hint-content"></div>
-      </div>
+    <!-- Run-it-twice dialog -->
+    <div id="rit-modal" class="modal" style="display: none">
+      <div class="modal-content" style="max-width: 480px">
+        <h2>🃏 双方均已全押！</h2>
+        <p style="color: #94a3b8; margin: 8px 0 16px">
+          发两次可以降低方差，将底池分两次结算。
+        </p>
 
-      <div class="panel-card" id="stats-panel" style="display:none">
-        <h3>📊 统计数据</h3>
-        <div id="stats-content"></div>
-      </div>
+        <div
+          id="rit-ai-decision"
+          style="
+            background: #1a2a3a;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 16px;
+          "
+        >
+          <div style="font-size: 0.9rem; color: #74b9ff">对手的选择：</div>
+          <div
+            id="rit-ai-choice"
+            style="font-size: 1.1rem; font-weight: bold; margin: 4px 0"
+          ></div>
+          <div
+            id="rit-ai-reason"
+            style="font-size: 0.85rem; color: #94a3b8"
+          ></div>
+        </div>
 
-      <div class="panel-card" id="log-panel">
-        <h3>📋 行动记录</h3>
-        <ul id="action-log" class="action-log"></ul>
-      </div>
-    </aside>
-  </div>
+        <div style="margin-bottom: 16px">
+          <div style="font-size: 0.9rem; color: #94a3b8; margin-bottom: 8px">
+            注意：只有双方都同意，才会发两次。
+          </div>
+          <button
+            id="rit-hint-btn"
+            class="btn btn-secondary"
+            onclick="requestRunItTwiceHint()"
+            style="margin-bottom: 8px; width: 100%"
+          >
+            💡 咨询 AI 建议
+          </button>
+          <div
+            id="rit-hint-content"
+            style="
+              display: none;
+              background: #1a2a3a;
+              border-radius: 8px;
+              padding: 10px;
+              margin-bottom: 8px;
+              font-size: 0.9rem;
+            "
+          ></div>
+        </div>
 
-  <!-- Hand result modal -->
-  <div id="result-modal" class="modal" style="display:none">
-    <div class="modal-content">
-      <h2>本局结果</h2>
-      <!-- winner + community cards -->
-      <div id="result-body"></div>
-      <!-- player hole cards reveal -->
-      <div id="result-reveal"></div>
-      <!-- AI analysis (populated async) -->
-      <div id="analysis-body"></div>
-      <div style="margin-top:16px">
-        <button class="btn btn-primary" onclick="closeModal(); nextHand()">下一手</button>
-        <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+        <div style="display: flex; gap: 12px">
+          <button
+            class="btn btn-secondary"
+            style="flex: 1"
+            onclick="submitRunItTwice(false)"
+          >
+            发一次
+          </button>
+          <button
+            class="btn btn-primary"
+            style="flex: 1"
+            onclick="submitRunItTwice(true)"
+          >
+            发两次
+          </button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Run-it-twice dialog -->
-  <div id="rit-modal" class="modal" style="display:none">
-    <div class="modal-content" style="max-width:480px">
-      <h2>🃏 双方均已全押！</h2>
-      <p style="color:#94a3b8;margin:8px 0 16px">发两次可以降低方差，将底池分两次结算。</p>
+    <!-- Config modal -->
+    <div id="config-modal" class="modal" style="display: none">
+      <div class="modal-content">
+        <h2>⚙️ 游戏配置</h2>
 
-      <div id="rit-ai-decision" style="background:#1a2a3a;border-radius:8px;padding:12px;margin-bottom:16px">
-        <div style="font-size:0.9rem;color:#74b9ff">对手的选择：</div>
-        <div id="rit-ai-choice" style="font-size:1.1rem;font-weight:bold;margin:4px 0"></div>
-        <div id="rit-ai-reason" style="font-size:0.85rem;color:#94a3b8"></div>
-      </div>
-
-      <div style="margin-bottom:16px">
-        <div style="font-size:0.9rem;color:#94a3b8;margin-bottom:8px">
-          注意：只有双方都同意，才会发两次。
+        <div class="config-section">
+          <div class="config-label">游戏模式</div>
+          <div class="config-row">
+            <label
+              ><input type="radio" name="cfg-mode" value="cash" /> 现金局</label
+            >
+            <label style="margin-left: 16px"
+              ><input type="radio" name="cfg-mode" value="tournament" />
+              锦标赛</label
+            >
+          </div>
         </div>
-        <button id="rit-hint-btn" class="btn btn-secondary" onclick="requestRunItTwiceHint()"
-                style="margin-bottom:8px;width:100%">
-          💡 咨询 AI 建议
-        </button>
-        <div id="rit-hint-content" style="display:none;background:#1a2a3a;border-radius:8px;padding:10px;margin-bottom:8px;font-size:0.9rem"></div>
-      </div>
 
-      <div style="display:flex;gap:12px">
-        <button class="btn btn-secondary" style="flex:1" onclick="submitRunItTwice(false)">发一次</button>
-        <button class="btn btn-primary"   style="flex:1" onclick="submitRunItTwice(true)">发两次</button>
+        <div class="config-section">
+          <div class="config-label">牌桌</div>
+          <div class="config-row">
+            <span>AI 对手数量 (2–5)</span>
+            <input
+              type="number"
+              id="cfg-num-opponents"
+              class="config-input"
+              min="2"
+              max="5"
+              oninput="onNumOpponentsChange(this.value)"
+            />
+          </div>
+          <div class="config-row">
+            <span>初始筹码</span>
+            <input
+              type="number"
+              id="cfg-starting-chips"
+              class="config-input"
+              min="100"
+              step="100"
+            />
+          </div>
+          <div class="config-row">
+            <span>最大筹码上限</span>
+            <input
+              type="number"
+              id="cfg-max-chips"
+              class="config-input"
+              min="100"
+              step="100"
+              placeholder="默认 2×初始"
+            />
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-label">盲注</div>
+          <div class="config-row">
+            <span>小盲 (Small Blind)</span
+            ><input
+              type="number"
+              id="cfg-small-blind"
+              class="config-input"
+              min="1"
+            />
+          </div>
+          <div class="config-row">
+            <span>大盲 (Big Blind)</span
+            ><input
+              type="number"
+              id="cfg-big-blind"
+              class="config-input"
+              min="1"
+            />
+          </div>
+          <div class="config-row">
+            <span>前注 (Ante)</span
+            ><input type="number" id="cfg-ante" class="config-input" min="0" />
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-label">训练功能</div>
+          <div class="config-row">
+            <span>实时提示功能</span>
+            <label class="toggle"
+              ><input type="checkbox" id="cfg-hint-enabled" /><span
+                class="toggle-slider"
+              ></span
+            ></label>
+          </div>
+          <div class="config-row">
+            <span>终局牌局分析</span>
+            <label class="toggle"
+              ><input type="checkbox" id="cfg-analysis-enabled" /><span
+                class="toggle-slider"
+              ></span
+            ></label>
+          </div>
+          <div class="config-row">
+            <span>显示对手风格</span>
+            <label class="toggle"
+              ><input type="checkbox" id="cfg-show-styles" /><span
+                class="toggle-slider"
+              ></span
+            ></label>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-label">功能</div>
+          <div class="config-row">
+            <span>全押后允许双次发牌</span>
+            <label class="toggle"
+              ><input type="checkbox" id="cfg-run-it-twice" /><span
+                class="toggle-slider"
+              ></span
+            ></label>
+          </div>
+          <div class="config-row">
+            <span>四色扑克牌</span>
+            <label class="toggle"
+              ><input type="checkbox" id="cfg-four-color" /><span
+                class="toggle-slider"
+              ></span
+            ></label>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-label">玩家的风格与筹码</div>
+          <div class="config-quick-btns">
+            <button class="btn btn-secondary" onclick="setAllStyles('random')">
+              全部随机
+            </button>
+            <button
+              class="btn btn-secondary"
+              onclick="setAllStyles('tight_aggressive')"
+            >
+              全部紧凶
+            </button>
+            <button
+              class="btn btn-secondary"
+              onclick="setAllStyles('loose_aggressive')"
+            >
+              全部松凶
+            </button>
+            <button
+              class="btn btn-secondary"
+              onclick="setAllStyles('tight_passive')"
+            >
+              全部紧弱
+            </button>
+            <button
+              class="btn btn-secondary"
+              onclick="setAllStyles('loose_passive')"
+            >
+              全部松弱
+            </button>
+            <button
+              class="btn btn-secondary"
+              onclick="setAllStyles('balanced')"
+            >
+              全部均衡
+            </button>
+          </div>
+          <div id="cfg-styles-list"></div>
+        </div>
+
+        <div style="margin-top: 16px; display: flex; gap: 10px">
+          <button class="btn btn-primary" onclick="saveConfig()">保存</button>
+          <button class="btn btn-secondary" onclick="closeConfigModal()">
+            取消
+          </button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Config modal -->
-  <div id="config-modal" class="modal" style="display:none">
-    <div class="modal-content">
-      <h2>⚙️ 游戏配置</h2>
+    <div
+      id="sidebar-overlay"
+      class="sidebar-overlay"
+      onclick="closeSidebar()"
+    ></div>
 
-      <div class="config-section">
-        <div class="config-label">游戏模式</div>
-        <div class="config-row">
-          <label><input type="radio" name="cfg-mode" value="cash"> 现金局</label>
-          <label style="margin-left:16px"><input type="radio" name="cfg-mode" value="tournament"> 锦标赛</label>
-        </div>
-      </div>
-
-      <div class="config-section">
-        <div class="config-label">牌桌</div>
-        <div class="config-row">
-          <span>AI 对手数量 (2–5)</span>
-          <input type="number" id="cfg-num-opponents" class="config-input" min="2" max="5"
-                 oninput="onNumOpponentsChange(this.value)" />
-        </div>
-        <div class="config-row">
-          <span>初始筹码</span>
-          <input type="number" id="cfg-starting-chips" class="config-input" min="100" step="100" />
-        </div>
-        <div class="config-row">
-          <span>最大筹码上限</span>
-          <input type="number" id="cfg-max-chips" class="config-input" min="100" step="100"
-                 placeholder="默认 2×初始" />
-        </div>
-      </div>
-
-      <div class="config-section">
-        <div class="config-label">盲注</div>
-        <div class="config-row"><span>小盲 (Small Blind)</span><input type="number" id="cfg-small-blind" class="config-input" min="1" /></div>
-        <div class="config-row"><span>大盲 (Big Blind)</span><input type="number" id="cfg-big-blind" class="config-input" min="1" /></div>
-        <div class="config-row"><span>前注 (Ante)</span><input type="number" id="cfg-ante" class="config-input" min="0" /></div>
-      </div>
-
-      <div class="config-section">
-        <div class="config-label">训练功能</div>
-        <div class="config-row"><span>实时提示功能</span>
-          <label class="toggle"><input type="checkbox" id="cfg-hint-enabled"><span class="toggle-slider"></span></label>
-        </div>
-        <div class="config-row"><span>终局牌局分析</span>
-          <label class="toggle"><input type="checkbox" id="cfg-analysis-enabled"><span class="toggle-slider"></span></label>
-        </div>
-        <div class="config-row"><span>显示对手风格</span>
-          <label class="toggle"><input type="checkbox" id="cfg-show-styles"><span class="toggle-slider"></span></label>
-        </div>
-      </div>
-
-      <div class="config-section">
-        <div class="config-label">功能</div>
-        <div class="config-row"><span>全押后允许双次发牌</span>
-          <label class="toggle"><input type="checkbox" id="cfg-run-it-twice"><span class="toggle-slider"></span></label>
-        </div>
-        <div class="config-row"><span>四色扑克牌</span>
-          <label class="toggle"><input type="checkbox" id="cfg-four-color"><span class="toggle-slider"></span></label>
-        </div>
-      </div>
-
-      <div class="config-section">
-        <div class="config-label">玩家的风格与筹码</div>
-        <div class="config-quick-btns">
-          <button class="btn btn-secondary" onclick="setAllStyles('random')">全部随机</button>
-          <button class="btn btn-secondary" onclick="setAllStyles('tight_aggressive')">全部紧凶</button>
-          <button class="btn btn-secondary" onclick="setAllStyles('loose_aggressive')">全部松凶</button>
-          <button class="btn btn-secondary" onclick="setAllStyles('tight_passive')">全部紧弱</button>
-          <button class="btn btn-secondary" onclick="setAllStyles('loose_passive')">全部松弱</button>
-          <button class="btn btn-secondary" onclick="setAllStyles('balanced')">全部均衡</button>
-        </div>
-        <div id="cfg-styles-list"></div>
-      </div>
-
-      <div style="margin-top:16px;display:flex;gap:10px">
-        <button class="btn btn-primary" onclick="saveConfig()">保存</button>
-        <button class="btn btn-secondary" onclick="closeConfigModal()">取消</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="sidebar-overlay" class="sidebar-overlay" onclick="closeSidebar()"></div>
-
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-  <script src="/static/js/app.js"></script>
-</body>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="/static/js/app.js"></script>
+  </body>
 </html>

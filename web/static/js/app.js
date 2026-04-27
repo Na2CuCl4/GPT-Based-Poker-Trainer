@@ -285,7 +285,7 @@ async function requestHint() {
     : hint.confidence === "中" ? "#fdcb6e" : "#b2bec3";
 
   const actionLabels = {
-    fold: "弃牌", check: "让牌", call: "跟注",
+    fold: "弃牌", check: "过牌", call: "跟注",
     raise: `加注至 ${hint.raise_to ?? ""}`, all_in: "全押",
   };
 
@@ -449,7 +449,7 @@ function renderOpponents(players, dealerIdx, currentPlayerIdx, revealAll) {
 
 function actionCN(action, amount) {
   const map = {
-    fold: "弃牌", check: "让牌", call: "跟注",
+    fold: "弃牌", check: "过牌", call: "跟注",
     raise: `加注 ${amount}`, all_in: "全押",
     small_blind: `小盲 ${amount}`, big_blind: `大盲 ${amount}`, ante: `Ante ${amount}`,
   };
