@@ -33,8 +33,13 @@ class GameSession:
     rit_human_choice: bool | None = None
     rit_pending: bool = False
     rit_lock: Lock = field(default_factory=Lock)
+    rit_ai_run_twice: bool | None = None
+    rit_ai_decided: bool = False
+    rit_ai_retry_event: Event = field(default_factory=Event)
     pending_analysis: dict | None = None
     last_active: float = field(default_factory=time.time)
+    ai_retry_pending: bool = False
+    ai_processing: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +96,9 @@ def create_app(config: dict):
         "post_hand_analysis":   config.get("training", {}).get("post_hand_analysis",True),
         "opponent_styles":      config.get("training", {}).get("opponent_styles",   ["random"]),
         "four_color_deck":      config.get("features", {}).get("four_color_deck",   True),
+        "action_timeout":       config.get("ai", {}).get("action_timeout",          30),
+        "hint_timeout":         config.get("ai", {}).get("hint_timeout",            20),
+        "analysis_timeout":     config.get("ai", {}).get("analysis_timeout",        60),
     })
 
     # ------------------------------------------------------------------
@@ -311,6 +319,37 @@ def create_app(config: dict):
         session.rit_event.set()
         return jsonify({"ok": True})
 
+    @app.route("/api/game/retry-ai", methods=["POST"])
+    @require_auth
+    def api_retry_ai():
+        client_id = _get_client_id()
+        if not client_id:
+            return jsonify({"error": "缺少 X-Client-Id 请求头"}), 400
+        session = _get_session(client_id)
+        if session is None:
+            return jsonify({"error": "游戏未开始"}), 400
+        if not session.ai_retry_pending:
+            return jsonify({"error": "无待重试的 AI 操作"}), 400
+        session.ai_retry_pending = False
+        socketio.start_background_task(_process_ai_turns, socketio, session, client_id)
+        return jsonify({"ok": True})
+
+    @app.route("/api/game/retry-rit-ai", methods=["POST"])
+    @require_auth
+    def api_retry_rit_ai():
+        client_id = _get_client_id()
+        if not client_id:
+            return jsonify({"error": "缺少 X-Client-Id 请求头"}), 400
+        session = _get_session(client_id)
+        if session is None:
+            return jsonify({"error": "游戏未开始"}), 400
+        # AI vs AI scenario: wake up the waiting retry loop
+        session.rit_ai_retry_event.set()
+        # Human vs AI scenario (rit_pending): spawn a fresh retry task
+        if session.rit_pending:
+            socketio.start_background_task(_retry_ai_rit_decision_bg, socketio, session, client_id)
+        return jsonify({"ok": True})
+
     @app.route("/api/game/run-it-twice-hint", methods=["POST"])
     @require_auth
     def api_run_it_twice_hint():
@@ -325,7 +364,11 @@ def create_app(config: dict):
         human = next((p for p in state.players if p.is_human), None)
         if human is None:
             return jsonify({"error": "找不到玩家"}), 400
-        advice = session.advisor.advise_run_it_twice(state, human)
+        hint_timeout = _config.get("ai", {}).get("hint_timeout", 20)
+        try:
+            advice = session.advisor.advise_run_it_twice(state, human, timeout=hint_timeout)
+        except TimeoutError:
+            return jsonify({"error": "获取建议超时，请重试", "is_timeout": True}), 504
         return jsonify(advice.model_dump())
 
     @app.route("/api/game/hint", methods=["POST"])
@@ -343,7 +386,11 @@ def create_app(config: dict):
         if human is None:
             return jsonify({"error": "找不到玩家"}), 400
         valid = session.engine.get_valid_actions()
-        hint = session.advisor.get_hint(state, human, valid)
+        hint_timeout = _config.get("ai", {}).get("hint_timeout", 20)
+        try:
+            hint = session.advisor.get_hint(state, human, valid, timeout=hint_timeout)
+        except TimeoutError:
+            return jsonify({"error": "获取建议超时，请重试", "is_timeout": True}), 504
         return jsonify(hint.model_dump())
 
     @app.route("/api/game/next-hand", methods=["POST"])
@@ -378,11 +425,13 @@ def create_app(config: dict):
         if session.pending_analysis is None:
             return jsonify({"error": "没有待分析的牌局"}), 400
 
+        analysis_timeout = _config.get("ai", {}).get("analysis_timeout", 60)
         socketio.start_background_task(
             _run_analysis_bg,
             session.advisor,
             session.pending_analysis["hand_data"],
             client_id,
+            analysis_timeout,
         )
         return jsonify({"ok": True})
 
@@ -456,9 +505,12 @@ def create_app(config: dict):
         socketio.emit("hand_result", payload, room=client_id)
         return payload
 
-    def _run_analysis_bg(advisor: GPTAdvisor, hand_data: dict, client_id: str) -> None:
-        analysis: HandAnalysis = advisor.analyze_hand(hand_data)
-        socketio.emit("hand_analysis", {"analysis": analysis.model_dump()}, room=client_id)
+    def _run_analysis_bg(advisor: GPTAdvisor, hand_data: dict, client_id: str, timeout: float = 60.0) -> None:
+        try:
+            analysis: HandAnalysis = advisor.analyze_hand(hand_data, timeout=timeout)
+            socketio.emit("hand_analysis", {"analysis": analysis.model_dump()}, room=client_id)
+        except TimeoutError:
+            socketio.emit("hand_analysis_failed", {}, room=client_id)
 
     def _handle_hand_over(session: GameSession, client_id: str, result: dict):
         payload = _finalize_hand(session, client_id, result)
@@ -472,60 +524,154 @@ def create_app(config: dict):
             _finalize_hand(session, client_id, result)
             return
 
+        action_timeout = _config.get("ai", {}).get("action_timeout", 30)
         state = session.engine.state
+        human = next((p for p in state.players if p.is_human), None)
+        human_in_hand = human is not None and not human.is_folded
+
+        # ── AI vs AI (human already folded) ──────────────────────────────
+        if not human_in_hand:
+            ai_run_twice = True
+            for p in state.players:
+                if p.is_human or p.is_folded:
+                    continue
+                opponent = session.opponents.get(p.idx)
+                if opponent is None:
+                    continue
+                sio.emit("ai_thinking", {"player_name": p.name}, room=client_id)
+                while True:
+                    session.rit_ai_retry_event.clear()
+                    try:
+                        decision = opponent.decide_run_it_twice(state, p, timeout=action_timeout)
+                        sio.emit("ai_action", {
+                            "player_name": p.name,
+                            "action": "run_twice_decision",
+                            "amount": 0,
+                            "reasoning": decision.reasoning,
+                            "run_twice": decision.run_twice,
+                        }, room=client_id)
+                        ai_run_twice = ai_run_twice and decision.run_twice
+                        break
+                    except TimeoutError:
+                        sio.emit("ai_action_failed", {
+                            "player_name": p.name,
+                            "player_idx": p.idx,
+                            "retry_type": "rit",
+                        }, room=client_id)
+                        signalled = session.rit_ai_retry_event.wait(timeout=300)
+                        if not signalled:
+                            ai_run_twice = False
+                            break
+                    except Exception as e:
+                        sio.emit("ai_action", {
+                            "player_name": p.name,
+                            "action": "run_twice_decision",
+                            "amount": 0,
+                            "reasoning": f"决策出错: {e}",
+                            "run_twice": False,
+                        }, room=client_id)
+                        ai_run_twice = False
+                        break
+
+            with session.lock:
+                result = session.engine.runout(run_twice=ai_run_twice)
+            _finalize_hand(session, client_id, result)
+            return
+
+        # ── Human vs AI (human is all-in) ────────────────────────────────
+        # Show dialog immediately, then get AI decision
+        with session.rit_lock:
+            session.rit_pending = True
+            session.rit_human_choice = None
+            session.rit_ai_decided = False
+            session.rit_ai_run_twice = None
+
+        sio.emit("run_it_twice_prompt", {"ai_pending": True}, room=client_id)
+
         ai_player = next(
             (p for p in state.players if not p.is_human and not p.is_folded),
             None,
         )
-
-        ai_run_twice = False
-        ai_reasoning = "无法获取AI决策"
-
         if ai_player:
             opponent = session.opponents.get(ai_player.idx)
             if opponent:
+                sio.emit("ai_thinking", {"player_name": ai_player.name}, room=client_id)
                 try:
-                    decision = opponent.decide_run_it_twice(state, ai_player)
-                    ai_run_twice = decision.run_twice
-                    ai_reasoning = decision.reasoning
+                    decision = opponent.decide_run_it_twice(state, ai_player, timeout=action_timeout)
+                    with session.rit_lock:
+                        session.rit_ai_run_twice = decision.run_twice
+                        session.rit_ai_decided = True
+                    sio.emit("run_it_twice_ai_result", {
+                        "ai_run_twice": decision.run_twice,
+                        "ai_reasoning": decision.reasoning,
+                    }, room=client_id)
+                except TimeoutError:
+                    sio.emit("run_it_twice_ai_failed", {}, room=client_id)
                 except Exception as e:
-                    ai_reasoning = f"决策失败: {e}"
-
-        with session.rit_lock:
-            session.rit_pending = True
-            session.rit_human_choice = None
-
-        sio.emit("run_it_twice_prompt", {
-            "ai_run_twice": ai_run_twice,
-            "ai_reasoning": ai_reasoning,
-        }, room=client_id)
+                    with session.rit_lock:
+                        session.rit_ai_run_twice = False
+                        session.rit_ai_decided = True
+                    sio.emit("run_it_twice_ai_result", {
+                        "ai_run_twice": False,
+                        "ai_reasoning": f"决策出错: {e}",
+                    }, room=client_id)
+        else:
+            with session.rit_lock:
+                session.rit_ai_decided = True
+                session.rit_ai_run_twice = False
 
         session.rit_event.clear()
         session.rit_event.wait(timeout=120)
 
         with session.rit_lock:
             human_choice = session.rit_human_choice
+            ai_run_twice = session.rit_ai_run_twice if session.rit_ai_decided else False
             session.rit_pending = False
 
-        final_run_twice = (human_choice is True) and ai_run_twice
+        final_run_twice = (human_choice is True) and (ai_run_twice is True)
 
         with session.lock:
             result = session.engine.runout(run_twice=final_run_twice)
         _finalize_hand(session, client_id, result)
 
+    def _retry_ai_rit_decision_bg(sio, session: GameSession, client_id: str) -> None:
+        """Retry AI run-it-twice decision for human-vs-AI scenario."""
+        action_timeout = _config.get("ai", {}).get("action_timeout", 30)
+        state = session.engine.state
+        ai_player = next(
+            (p for p in state.players if not p.is_human and not p.is_folded),
+            None,
+        )
+        if ai_player is None:
+            return
+        opponent = session.opponents.get(ai_player.idx)
+        if opponent is None:
+            return
+        try:
+            decision = opponent.decide_run_it_twice(state, ai_player, timeout=action_timeout)
+            with session.rit_lock:
+                session.rit_ai_run_twice = decision.run_twice
+                session.rit_ai_decided = True
+            sio.emit("run_it_twice_ai_result", {
+                "ai_run_twice": decision.run_twice,
+                "ai_reasoning": decision.reasoning,
+            }, room=client_id)
+        except TimeoutError:
+            sio.emit("run_it_twice_ai_failed", {}, room=client_id)
+
     def _process_ai_turns(sio, session: GameSession, client_id: str) -> None:
+        # Guard: only one _process_ai_turns task at a time per session
+        with session.lock:
+            if session.ai_processing:
+                return
+            session.ai_processing = True
+
         delay = _config.get("ai", {}).get("response_delay", 1.5)
-        while True:
-            state = session.engine.state
-            if state.street == "showdown":
-                break
-            current_p = state.players[state.current_player_idx]
-            if current_p.is_human:
-                break
+        action_timeout = _config.get("ai", {}).get("action_timeout", 30)
 
-            time.sleep(delay)
-
-            with session.lock:
+        try:
+            while True:
+                # ── 1. Read state (outside lock is fine for a quick peek) ──
                 state = session.engine.state
                 if state.street == "showdown":
                     break
@@ -533,47 +679,83 @@ def create_app(config: dict):
                 if current_p.is_human:
                     break
 
-                opponent = session.opponents.get(current_p.idx)
-                if opponent is None:
-                    break
-                valid = session.engine.get_valid_actions()
-                decision = opponent.decide(state, current_p, valid)
+                time.sleep(delay)
+
+                # ── 2. Re-read inside lock, capture what we need ──────────
+                with session.lock:
+                    state = session.engine.state
+                    if state.street == "showdown":
+                        break
+                    current_p = state.players[state.current_player_idx]
+                    if current_p.is_human:
+                        break
+                    opponent = session.opponents.get(current_p.idx)
+                    if opponent is None:
+                        break
+                    valid = session.engine.get_valid_actions()
+                    player_idx = current_p.idx
+                    player_name = current_p.name
+
+                # ── 3. GPT call — lock is released ────────────────────────
+                sio.emit("ai_thinking", {"player_name": player_name}, room=client_id)
+                try:
+                    decision = opponent.decide(state, current_p, valid, timeout=action_timeout)
+                except TimeoutError:
+                    session.ai_retry_pending = True
+                    sio.emit("ai_action_failed", {
+                        "player_name": player_name,
+                        "player_idx": player_idx,
+                    }, room=client_id)
+                    return
 
                 action = decision.action
                 amount = decision.raise_to or 0
 
-                valid_names = {a.action for a in valid}
-                if action not in valid_names:
-                    call_opt = next((a for a in valid if a.action == "call"), None)
-                    if call_opt:
-                        action, amount = "call", call_opt.call_amount
-                    elif any(a.action == "check" for a in valid):
-                        action, amount = "check", 0
-                    else:
-                        action, amount = "fold", 0
+                # ── 4. Apply action (inside lock, re-validate player idx) ──
+                with session.lock:
+                    state = session.engine.state
+                    if state.street == "showdown":
+                        break
+                    current_p_now = state.players[state.current_player_idx]
+                    if current_p_now.idx != player_idx:
+                        break
 
-                sio.emit("ai_action", {
-                    "player_name": current_p.name,
-                    "action": action,
-                    "amount": amount,
-                    "reasoning": decision.reasoning,
-                }, room=client_id)
+                    valid_now = session.engine.get_valid_actions()
+                    valid_names = {a.action for a in valid_now}
+                    if action not in valid_names:
+                        call_opt = next((a for a in valid_now if a.action == "call"), None)
+                        if call_opt:
+                            action, amount = "call", call_opt.call_amount
+                        elif any(a.action == "check" for a in valid_now):
+                            action, amount = "check", 0
+                        else:
+                            action, amount = "fold", 0
 
-                result = session.engine.apply_action(action, amount)
+                    sio.emit("ai_action", {
+                        "player_name": player_name,
+                        "action": action,
+                        "amount": amount,
+                        "reasoning": decision.reasoning,
+                    }, room=client_id)
 
-            if result.get("run_it_twice_prompt"):
-                _handle_run_it_twice_bg(sio, session, client_id)
-                break
+                    result = session.engine.apply_action(action, amount)
 
+                if result.get("run_it_twice_prompt"):
+                    _handle_run_it_twice_bg(sio, session, client_id)
+                    return
+
+                with session.lock:
+                    if result["hand_over"]:
+                        _finalize_hand(session, client_id, result)
+                        return
+
+                    sio.emit("state_update", {
+                        "state": session.engine.get_state_snapshot(),
+                        "valid_actions": session.engine.get_valid_actions_dict(),
+                        "street_changed": result.get("street_changed", False),
+                    }, room=client_id)
+        finally:
             with session.lock:
-                if result["hand_over"]:
-                    _finalize_hand(session, client_id, result)
-                    break
-
-                sio.emit("state_update", {
-                    "state": session.engine.get_state_snapshot(),
-                    "valid_actions": session.engine.get_valid_actions_dict(),
-                    "street_changed": result.get("street_changed", False),
-                }, room=client_id)
+                session.ai_processing = False
 
     return app, socketio

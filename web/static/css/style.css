@@ -556,6 +556,64 @@ body {
 }
 
 /* =========================================================
+   Toast notifications
+   ========================================================= */
+#toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  background: #2d3f55;
+  color: #e2e8f0;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  max-width: 300px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .45);
+  animation: toast-in 0.22s ease;
+}
+.toast-error { border-left: 3px solid #ff7675; }
+.toast-info  { border-left: 3px solid #74b9ff; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Retry button inside seat badge area */
+.retry-btn-seat {
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  background: #2d3f55;
+  color: #74b9ff;
+  border: 1px solid #74b9ff;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 2px;
+  pointer-events: all;
+}
+.retry-btn-seat:hover { background: #3a5068; }
+
+/* Retry button (inside action log) */
+.retry-btn {
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 0.78rem;
+  background: #2d3f55;
+  color: #74b9ff;
+  border: 1px solid #74b9ff;
+  border-radius: 4px;
+  cursor: pointer;
+  pointer-events: all;
+}
+.retry-btn:hover { background: #3a5068; }
+
+/* =========================================================
    Portrait mode (aspect-ratio < 1): highlight cards, not seat border
    ========================================================= */
 @media (max-aspect-ratio: 1/1) {

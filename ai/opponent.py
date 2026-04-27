@@ -95,6 +95,7 @@ class GPTOpponent:
         state: GameState,
         player: PlayerState,
         valid_actions: list[ActionOption],
+        timeout: float = 30.0,
     ) -> OpponentDecision:
         user_prompt = _build_user_prompt(state, player, valid_actions)
         try:
@@ -102,9 +103,12 @@ class GPTOpponent:
                 system_prompt=self._system_prompt,
                 user_prompt=user_prompt,
                 schema=OpponentDecision,
+                timeout=timeout,
             )
+        except TimeoutError:
+            raise
         except Exception as e:
-            # Fallback: call or check
+            # Fallback on non-timeout errors: call or check
             has_call = any(a.action == "call" for a in valid_actions)
             fallback = "call" if has_call else "check"
             decision = OpponentDecision(action=fallback, reasoning=f"GPT error: {e}")
@@ -114,6 +118,7 @@ class GPTOpponent:
         self,
         state: GameState,
         player: PlayerState,
+        timeout: float = 30.0,
     ) -> RunItTwiceDecision:
         board = [str(c) for c in state.community_cards]
         hole = [str(c) for c in player.hole_cards]
@@ -135,6 +140,9 @@ class GPTOpponent:
                 system_prompt=system,
                 user_prompt=json.dumps(data, ensure_ascii=False),
                 schema=RunItTwiceDecision,
+                timeout=timeout,
             )
+        except TimeoutError:
+            raise
         except Exception as e:
             return RunItTwiceDecision(run_twice=False, reasoning=f"GPT error: {e}")

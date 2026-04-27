@@ -46,6 +46,7 @@ let gameState = null;
 let validActions = [];
 let raiseMin = 0, raiseMax = 1000;
 let _currentHandActions = [];
+let _aiRetryPlayerIdx = null;
 
 // ---------------------------------------------------------------------------
 // localStorage helpers
@@ -86,6 +87,32 @@ function getGameConfig() {
 function saveGameConfig(cfg) { localStorage.setItem(LS_CONFIG, JSON.stringify(cfg)); }
 
 // ---------------------------------------------------------------------------
+// Toast notifications
+// ---------------------------------------------------------------------------
+function showToast(message, type = "error", duration = 3500) {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const el = document.createElement("div");
+  el.className = `toast toast-${type}`;
+  el.textContent = message;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), duration);
+}
+
+// ---------------------------------------------------------------------------
+// Seat badge helper
+// ---------------------------------------------------------------------------
+function updateSeatBadge(playerName, text) {
+  document.querySelectorAll(".seat").forEach(seat => {
+    const nameEl = seat.querySelector(".seat-name");
+    if (nameEl && nameEl.textContent.includes(playerName)) {
+      const row = seat.querySelector(".seat-action-row");
+      if (row) row.innerHTML = `<span class="folded-label">${text}</span>`;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 function isHumanTurn(state) {
@@ -114,6 +141,7 @@ function initSocket() {
   socket.on("connect", () => socket.emit("join_session", { client_id: CLIENT_ID }));
 
   socket.on("state_update", ({ state, valid_actions, street_changed }) => {
+    _aiRetryPlayerIdx = null;
     gameState = state;
     validActions = valid_actions;
     renderTable(state);
@@ -125,11 +153,20 @@ function initSocket() {
     if (street_changed) logStreet(state.street);
   });
 
-  socket.on("ai_action", ({ player_name, action, amount }) => {
-    addLog(player_name, action, amount);
+  socket.on("ai_action", ({ player_name, action, amount, reasoning, run_twice }) => {
+    _aiRetryPlayerIdx = null;
+    if (action === "run_twice_decision") {
+      const choice = run_twice ? "✅ 同意发两次" : "❌ 选择发一次";
+      addLogRaw(`<span class="log-player">${player_name}</span> <span>${choice}</span>` +
+        (reasoning ? ` <small style="color:#94a3b8">${reasoning}</small>` : ""));
+    } else {
+      addLog(player_name, action, amount);
+    }
+    updateSeatBadge(player_name, actionCN(action, amount));
   });
 
   socket.on("hand_result", ({ state, result }) => {
+    _aiRetryPlayerIdx = null;
     gameState = state;
     renderTable(state, true);
     setActionButtonsEnabled(false);
@@ -153,12 +190,52 @@ function initSocket() {
     refreshStats();
   });
 
+  socket.on("ai_thinking", ({ player_name }) => {
+    updateSeatBadge(player_name, "思考中…");
+  });
+
+  socket.on("ai_action_failed", ({ player_name, player_idx, retry_type }) => {
+    addLogRaw(`<span class="log-player">${player_name}</span> <span style="color:#ff7675">决策失败</span>`);
+    if (retry_type !== "rit") {
+      _aiRetryPlayerIdx = player_idx;
+      renderTable(gameState);
+    } else {
+      updateSeatBadge(player_name, "决策失败");
+    }
+  });
+
   socket.on("hand_analysis", ({ analysis }) => {
     appendAnalysisToModal(analysis);
   });
 
-  socket.on("run_it_twice_prompt", ({ ai_run_twice, ai_reasoning }) => {
-    showRunItTwiceDialog(ai_run_twice, ai_reasoning);
+  socket.on("hand_analysis_failed", () => {
+    const ab = document.getElementById("analysis-body");
+    if (ab) ab.innerHTML = `<div style="color:#ff7675;font-size:0.9rem;margin-top:8px">AI 分析失败，请重试</div>`;
+    const loading = document.getElementById("analysis-loading");
+    if (loading) loading.style.display = "none";
+    const btn = document.getElementById("btn-analysis");
+    if (btn) { btn.textContent = "🔄 重新分析"; btn.disabled = false; }
+  });
+
+  socket.on("run_it_twice_prompt", (data) => {
+    showRunItTwiceDialog(data);
+  });
+
+  socket.on("run_it_twice_ai_result", ({ ai_run_twice, ai_reasoning }) => {
+    if (document.getElementById("rit-modal").style.display === "none") return;
+    const choiceEl = document.getElementById("rit-ai-choice");
+    choiceEl.textContent = ai_run_twice ? "✅ 同意发两次" : "❌ 选择发一次";
+    choiceEl.style.color = ai_run_twice ? "#55efc4" : "#fdcb6e";
+    document.getElementById("rit-ai-reason").textContent = ai_reasoning || "";
+    document.getElementById("rit-ai-retry-btn").style.display = "none";
+  });
+
+  socket.on("run_it_twice_ai_failed", () => {
+    if (document.getElementById("rit-modal").style.display === "none") return;
+    const choiceEl = document.getElementById("rit-ai-choice");
+    choiceEl.textContent = "⚠️ 决策失败";
+    choiceEl.style.color = "#ff7675";
+    document.getElementById("rit-ai-retry-btn").style.display = "block";
   });
 }
 
@@ -180,7 +257,7 @@ async function startSession() {
     body: JSON.stringify({ ...cfg, starting_chips: savedChips ?? cfg.starting_chips }),
   });
   const data = await res.json();
-  if (data.error) { alert(data.error); return; }
+  if (data.error) { showToast(data.error); return; }
 
   gameState = data.state;
   validActions = data.valid_actions;
@@ -202,7 +279,7 @@ async function nextHand() {
 
   const res = await apiFetch("/api/game/next-hand", { method: "POST" });
   const data = await res.json();
-  if (data.error) { alert(data.error); return; }
+  if (data.error) { showToast(data.error); return; }
 
   gameState = data.state;
   validActions = data.valid_actions;
@@ -222,14 +299,21 @@ async function sendAction(action, amount = 0) {
   // Disable buttons immediately to prevent double-click
   setActionButtonsEnabled(false);
 
-  const res = await apiFetch("/api/game/action", {
-    method: "POST",
-    body: JSON.stringify({ action, amount }),
-  });
-  const data = await res.json();
+  let res, data;
+  try {
+    res = await apiFetch("/api/game/action", {
+      method: "POST",
+      body: JSON.stringify({ action, amount }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (e) {
+    showToast("操作发送失败，请重试");
+    if (gameState && isHumanTurn(gameState)) updateActions(validActions);
+    return;
+  }
   if (data.error) {
-    alert(data.error);
-    // Re-enable if still human's turn
+    showToast(data.error);
     if (gameState && isHumanTurn(gameState)) updateActions(validActions);
     return;
   }
@@ -331,9 +415,16 @@ function renderTable(state, revealAll = false) {
   if (human) {
     const isDealer = state.dealer_idx === human.idx;
     const dealerMark = isDealer ? `<span class="dealer-btn">D</span>` : "";
-    const actionBadge = human.last_action && !human.is_folded && !humanTurn
-      ? `<span class="seat-action-badge">${actionCN(human.last_action, human.last_action_amount)}</span>`
-      : "";
+    let actionBadge = "";
+    if (!human.is_folded && state.street !== "showdown") {
+      if (humanTurn) {
+        actionBadge = `<span class="folded-label">思考中…</span>`;
+      } else if (!human.last_action) {
+        actionBadge = `<span class="folded-label">等待操作</span>`;
+      } else {
+        actionBadge = `<span class="seat-action-badge">${actionCN(human.last_action, human.last_action_amount)}</span>`;
+      }
+    }
     const betInfo = human.current_bet > 0
       ? `<span class="seat-bet"> | 注: ${human.current_bet}</span>` : "";
     const actionLine = actionBadge || human.is_folded
@@ -413,9 +504,20 @@ function renderOpponents(players, dealerIdx, currentPlayerIdx, revealAll) {
     const isDealer  = p.idx === dealerIdx;
     const isCurrent = p.idx === currentPlayerIdx;
     const dealerMark = isDealer ? `<span class="dealer-btn">D</span>` : "";
-    const actionBadge = p.last_action && !p.is_folded && !isCurrent
-      ? `<span class="seat-action-badge">${actionCN(p.last_action, p.last_action_amount)}</span>`
-      : "";
+    let actionBadge = "";
+    if (p.idx === _aiRetryPlayerIdx) {
+      actionBadge = `<button class="retry-btn-seat" onclick="retryAiAction()">🔄 重试</button>`;
+    } else {
+      if (p.is_folded || gameState?.street === "showdown") {
+        actionBadge = "";
+      } else if (isCurrent) {
+        actionBadge = `<span class="folded-label">思考中…</span>`;
+      } else if (!p.last_action) {
+        actionBadge = `<span class="folded-label">等待操作</span>`;
+      } else {
+        actionBadge = `<span class="seat-action-badge">${actionCN(p.last_action, p.last_action_amount)}</span>`;
+      }
+    }
     const betInfo = p.current_bet > 0
       ? `<span class="seat-bet"> | 注: ${p.current_bet}</span>` : "";
 
@@ -502,14 +604,22 @@ function onRaiseInputChange(val) {
 // ---------------------------------------------------------------------------
 // Run-it-twice dialog
 // ---------------------------------------------------------------------------
-function showRunItTwiceDialog(aiRunTwice, aiReasoning) {
+function showRunItTwiceDialog({ ai_pending, ai_run_twice, ai_reasoning } = {}) {
   const choiceEl = document.getElementById("rit-ai-choice");
   const reasonEl = document.getElementById("rit-ai-reason");
+  const retryBtn = document.getElementById("rit-ai-retry-btn");
   const hintContent = document.getElementById("rit-hint-content");
 
-  choiceEl.textContent = aiRunTwice ? "✅ 同意发两次" : "❌ 选择发一次";
-  choiceEl.style.color = aiRunTwice ? "#55efc4" : "#fdcb6e";
-  reasonEl.textContent = aiReasoning || "";
+  if (ai_pending) {
+    choiceEl.textContent = "AI 决定中…";
+    choiceEl.style.color = "#94a3b8";
+    if (retryBtn) retryBtn.style.display = "none";
+  } else {
+    choiceEl.textContent = ai_run_twice ? "✅ 同意发两次" : "❌ 选择发一次";
+    choiceEl.style.color = ai_run_twice ? "#55efc4" : "#fdcb6e";
+    if (retryBtn) retryBtn.style.display = "none";
+  }
+  reasonEl.textContent = ai_reasoning || "";
   hintContent.style.display = "none";
   hintContent.innerHTML = "";
 
@@ -596,24 +706,32 @@ function showHandResult(result, state) {
   document.getElementById("result-body").innerHTML = bodyHtml;
   document.getElementById("result-reveal").innerHTML = revealHtml || "";
 
-  document.getElementById("analysis-body").innerHTML = getGameConfig().post_hand_analysis ? `
-    <hr style="border-color:#2d3f55;margin:12px 0"/>
-    <div id="analysis-trigger">
-      <button class="btn btn-secondary" onclick="requestAnalysis()" style="width:100%">🤖 AI 分析本局</button>
-    </div>
-    <div id="analysis-loading" style="display:none;color:#94a3b8;font-size:0.9rem">⏳ AI 正在分析本局…</div>
-  ` : "";
+  // Clear analysis area; permanent analysis button is in the HTML button row
+  document.getElementById("analysis-body").innerHTML = "";
+  document.getElementById("analysis-loading").style.display = "none";
+  const btnAnalysis = document.getElementById("btn-analysis");
+  if (btnAnalysis) {
+    if (getGameConfig().post_hand_analysis) {
+      btnAnalysis.style.display = "";
+      btnAnalysis.disabled = false;
+      btnAnalysis.textContent = "🤖 AI 分析";
+    } else {
+      btnAnalysis.style.display = "none";
+    }
+  }
 
   document.getElementById("result-modal").style.display = "flex";
 }
 
 async function requestAnalysis() {
-  const trigger = document.getElementById("analysis-trigger");
+  const btn = document.getElementById("btn-analysis");
   const loading = document.getElementById("analysis-loading");
-  if (trigger) trigger.style.display = "none";
+  const ab = document.getElementById("analysis-body");
+  if (btn) { btn.disabled = true; btn.textContent = "分析中…"; }
   if (loading) loading.style.display = "block";
+  if (ab) ab.innerHTML = "";
   await apiFetch("/api/game/analyze", { method: "POST" });
-  // Result arrives via hand_analysis socket event → appendAnalysisToModal
+  // Result arrives via hand_analysis / hand_analysis_failed socket event
 }
 
 function _buildRunTwiceResultHtml(result) {
@@ -675,6 +793,10 @@ function appendAnalysisToModal(analysis) {
     <div class="analysis-lesson">💡 本局要点：${analysis.main_lesson}</div>
     <ul class="analysis-tips">${tipsHtml}</ul>
   `;
+  const loading = document.getElementById("analysis-loading");
+  if (loading) loading.style.display = "none";
+  const btn = document.getElementById("btn-analysis");
+  if (btn) btn.style.display = "none";
 }
 
 function closeModal() {
@@ -683,6 +805,23 @@ function closeModal() {
 
 function showNextHandButton() {
   document.getElementById("btn-next").style.display = "inline-block";
+}
+
+async function retryAiAction() {
+  if (_aiRetryPlayerIdx !== null && gameState) {
+    const player = gameState.players.find(p => p.idx === _aiRetryPlayerIdx);
+    _aiRetryPlayerIdx = null;
+    if (player) updateSeatBadge(player.name, "思考中…");
+  }
+  await apiFetch("/api/game/retry-ai", { method: "POST" });
+}
+
+async function retryRitAi() {
+  const retryBtn = document.getElementById("rit-ai-retry-btn");
+  const choiceEl = document.getElementById("rit-ai-choice");
+  if (retryBtn) retryBtn.style.display = "none";
+  if (choiceEl) { choiceEl.textContent = "AI 决定中…"; choiceEl.style.color = "#94a3b8"; }
+  await apiFetch("/api/game/retry-rit-ai", { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------

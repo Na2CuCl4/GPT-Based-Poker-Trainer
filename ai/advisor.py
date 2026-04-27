@@ -128,6 +128,7 @@ class GPTAdvisor:
         state: GameState,
         player: PlayerState,
         valid_actions: list[ActionOption],
+        timeout: float = 20.0,
     ) -> HintRecommendation:
         user_prompt = _build_hint_prompt(state, player, valid_actions, self.show_styles)
         try:
@@ -135,7 +136,10 @@ class GPTAdvisor:
                 system_prompt=_HINT_SYSTEM,
                 user_prompt=user_prompt,
                 schema=HintRecommendation,
+                timeout=timeout,
             )
+        except TimeoutError:
+            raise
         except Exception as e:
             return HintRecommendation(
                 action="check",
@@ -145,14 +149,17 @@ class GPTAdvisor:
                 pot_odds_note="",
             )
 
-    def analyze_hand(self, hand_result: dict) -> HandAnalysis:
+    def analyze_hand(self, hand_result: dict, timeout: float = 60.0) -> HandAnalysis:
         user_prompt = _build_analysis_prompt(hand_result)
         try:
             return gpt_client.parse_response(
                 system_prompt=_ANALYSIS_SYSTEM,
                 user_prompt=user_prompt,
                 schema=HandAnalysis,
+                timeout=timeout,
             )
+        except TimeoutError:
+            raise
         except Exception as e:
             return HandAnalysis(
                 overall_score=0,
@@ -166,6 +173,7 @@ class GPTAdvisor:
         self,
         state: GameState,
         player: PlayerState,
+        timeout: float = 20.0,
     ) -> RunItTwiceDecision:
         board = [str(c) for c in state.community_cards]
         hole = [str(c) for c in player.hole_cards]
@@ -186,6 +194,9 @@ class GPTAdvisor:
                 system_prompt=system,
                 user_prompt=json.dumps(data, ensure_ascii=False),
                 schema=RunItTwiceDecision,
+                timeout=timeout,
             )
+        except TimeoutError:
+            raise
         except Exception as e:
             return RunItTwiceDecision(run_twice=False, reasoning=f"获取建议失败: {e}")

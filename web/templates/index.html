@@ -200,7 +200,34 @@
         <div id="result-reveal"></div>
         <!-- AI analysis (populated async) -->
         <div id="analysis-body"></div>
-        <div style="margin-top: 16px">
+        <div
+          id="analysis-loading"
+          style="
+            display: none;
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-top: 8px;
+          "
+        >
+          ⏳ AI 正在分析本局…
+        </div>
+        <div
+          style="
+            margin-top: 16px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+          "
+        >
+          <button
+            id="btn-analysis"
+            class="btn btn-secondary"
+            onclick="requestAnalysis()"
+            style="display: none"
+          >
+            🤖 AI 分析
+          </button>
           <button
             class="btn btn-primary"
             onclick="
@@ -236,11 +263,26 @@
           <div
             id="rit-ai-choice"
             style="font-size: 1.1rem; font-weight: bold; margin: 4px 0"
-          ></div>
+          >
+            AI 决定中…
+          </div>
           <div
             id="rit-ai-reason"
             style="font-size: 0.85rem; color: #94a3b8"
           ></div>
+          <button
+            id="rit-ai-retry-btn"
+            class="btn btn-secondary"
+            onclick="retryRitAi()"
+            style="
+              display: none;
+              width: 100%;
+              margin-top: 8px;
+              font-size: 0.85rem;
+            "
+          >
+            🔄 重试 AI 决定
+          </button>
         </div>
 
         <div style="margin-bottom: 16px">
@@ -469,6 +511,9 @@
       class="sidebar-overlay"
       onclick="closeSidebar()"
     ></div>
+
+    <!-- Toast notification container -->
+    <div id="toast-container"></div>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="/static/js/app.js"></script>
