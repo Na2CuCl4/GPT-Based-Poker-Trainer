@@ -119,16 +119,7 @@ class GameEngine:
             p.last_action_amount = 0
             p.acted_this_round = False
 
-        # Auto rebuy / cashout: keep all chips in [1, max_chips]
         for p in s.players:
-            if p.chips <= 0:
-                while p.chips <= 0:
-                    p.chips += self.starting_chips
-                    p.chip_adjustment -= 1
-            elif p.chips > self.max_chips:
-                while p.chips > self.max_chips:
-                    p.chips -= self.starting_chips
-                    p.chip_adjustment += 1
             p.chips_before_hand = p.chips
 
         # Shuffle and deal
@@ -304,20 +295,24 @@ class GameEngine:
 
         # Betting round complete?
         if self._betting_round_complete():
-            # Check for all-in runout: all remaining non-folded players are all-in
             active_betting = [pl for pl in s.players if not pl.is_folded and not pl.is_all_in]
-            if not active_betting and len(active_not_folded) >= 2:
-                if self.run_it_twice_enabled and len(s.community_cards) < 5:
-                    human_in_hand = any(p.is_human and not p.is_folded for p in s.players)
-                    if human_in_hand:
-                        return {
-                            "hand_over": False,
-                            "run_it_twice_prompt": True,
-                            "next_player_idx": -1,
-                            "street_changed": False,
-                        }
-                # Auto-runout: deal all remaining cards and go to showdown
-                return self._runout_once()
+            if len(active_betting) <= 1 and len(active_not_folded) >= 2:
+                # All community cards dealt → resolve showdown
+                if len(s.community_cards) >= 5:
+                    return self._resolve_showdown()
+                # RIT: only when exactly 2 players all-in (no active bettors)
+                if not active_betting and len(active_not_folded) == 2:
+                    if self.run_it_twice_enabled:
+                        human_in_hand = any(p.is_human and not p.is_folded for p in s.players)
+                        if human_in_hand:
+                            return {
+                                "hand_over": False,
+                                "run_it_twice_prompt": True,
+                                "next_player_idx": -1,
+                                "street_changed": False,
+                            }
+                # Step-by-step runout handled by server
+                return {"hand_over": False, "all_in_runout": True, "next_player_idx": -1, "street_changed": False}
 
             return self._advance_street()
 
@@ -330,6 +325,35 @@ class GameEngine:
         if run_twice:
             return self._runout_twice()
         return self._runout_once()
+
+    def step_runout(self) -> dict:
+        """Deal one more street during all-in runout. Returns {done, street}."""
+        s = self.state
+        street_idx = STREET_ORDER.index(s.street)
+        next_street = STREET_ORDER[street_idx + 1]
+        if next_street == "flop":
+            s.community_cards.extend(self._deck.deal(3))
+        elif next_street in ("turn", "river"):
+            s.community_cards.extend(self._deck.deal(1))
+        elif next_street == "showdown":
+            return {"done": True, "street": "showdown"}
+        s.street = next_street
+        return {"done": next_street == "river", "street": next_street}
+
+    def settle_runout(self) -> dict:
+        """Resolve showdown after all-in runout streets have been dealt."""
+        return self._resolve_showdown()
+
+    def apply_rebuy_cashout(self) -> None:
+        """Apply rebuy/cashout after a hand ends."""
+        for p in self.state.players:
+            if p.chips == 0:
+                p.chips = self.starting_chips
+                p.chip_adjustment -= 1
+            else:
+                while p.chips > self.max_chips:
+                    p.chips -= self.starting_chips
+                    p.chip_adjustment += 1
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -415,7 +439,6 @@ class GameEngine:
         """Deal remaining community cards twice, split each side pot between runs."""
         s = self.state
         base_community = list(s.community_cards)
-        deck_snapshot = list(self._deck._cards)
 
         # Build side pots now (before dealing) — based on total_bet
         side_pots = self._build_side_pots()
@@ -426,8 +449,7 @@ class GameEngine:
         community_1 = [c.to_dict() for c in s.community_cards]
         run_1_results = self._evaluate_pots_only(side_pots)
 
-        # --- Run 2 (restore deck) ---
-        self._deck._cards = deck_snapshot
+        # --- Run 2 (continue from remaining deck — next N cards) ---
         s.community_cards = list(base_community)
         self._deal_remaining_community_inplace()
         community_2 = [c.to_dict() for c in s.community_cards]

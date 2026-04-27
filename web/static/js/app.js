@@ -740,9 +740,19 @@ function _buildRunTwiceResultHtml(result) {
   const comm1 = result.run_1_community || [];
   const comm2 = result.run_2_community || [];
 
-  const potSummary = (runResults) => runResults.map(p =>
-    `${p.winners.join("、")}${p.hand_name ? "（" + p.hand_name + "）" : ""} 赢 ${p.pot_amount}`
-  ).join("；");
+  const potSummary = (runResults) => {
+    const winMap = new Map();
+    runResults.forEach(p => {
+      const key = [...p.winners].sort().join(",");
+      if (!winMap.has(key)) winMap.set(key, { winners: p.winners, total: 0, hand_name: p.hand_name || "" });
+      const e = winMap.get(key);
+      e.total += p.pot_amount;
+      if (p.hand_name && !e.hand_name) e.hand_name = p.hand_name;
+    });
+    return [...winMap.values()]
+      .map(e => `${e.winners.join("、")}${e.hand_name ? "（" + e.hand_name + "）" : ""} 赢 ${e.total}`)
+      .join("；");
+  };
 
   const cardRowFromDicts = (cards) => (cards || []).map(c => cardHtml(c, true)).join("");
 
@@ -762,7 +772,7 @@ function _buildRunTwiceResultHtml(result) {
 
   // Combined winners
   const pots = result.side_pot_results || [];
-  const totalWinners = pots.length > 0 ? pots[0].winners.join("、") : "未知";
+  const totalWinners = pots.length > 0 ? [...new Set(pots.flatMap(p => p.winners))].join("、") : "未知";
   html += `<div class="result-winner" style="margin-top:12px">🏆 综合结果：${totalWinners}</div>`;
 
   return html;
@@ -880,9 +890,11 @@ function addLogRaw(html) {
 
 function logHandEnd(result, state) {
   if (state?.players) {
+    const chipsEnd = result.chips_end || {};
     [...state.players].reverse().forEach(p => {
       const before = p.chips_before_hand ?? p.chips;
-      const net = p.chips - before;
+      const afterHand = chipsEnd[p.name] ?? p.chips;
+      const net = afterHand - before;
       const sign = net >= 0 ? "+" : "";
       addLogRaw(`<span class="log-chips">${getDisplayName(p)}: ${sign}${net} (余${p.chips})</span>`);
     });

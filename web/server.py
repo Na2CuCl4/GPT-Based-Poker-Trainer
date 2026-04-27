@@ -292,6 +292,14 @@ def create_app(config: dict):
                     "result": result,
                 })
 
+            if result.get("all_in_runout"):
+                socketio.start_background_task(_handle_allin_runout_bg, socketio, session, client_id)
+                return jsonify({
+                    "state": session.engine.get_state_snapshot(),
+                    "valid_actions": [],
+                    "result": result,
+                })
+
             socketio.start_background_task(_process_ai_turns, socketio, session, client_id)
 
         return jsonify({
@@ -471,6 +479,13 @@ def create_app(config: dict):
 
     def _finalize_hand(session: GameSession, client_id: str, result: dict) -> dict:
         state = session.engine.state
+
+        # Capture natural post-hand chips before rebuy/cashout (for log net display)
+        chips_end = {p.name: p.chips for p in state.players}
+
+        # Apply rebuy/cashout — mutates p.chips and p.chip_adjustment
+        session.engine.apply_rebuy_cashout()
+
         pot_results = result.get("side_pot_results", [])
 
         hand_data = {
@@ -490,7 +505,7 @@ def create_app(config: dict):
                     "style": p.style if session.show_styles else "未知",
                     "is_human": p.is_human,
                     "hole_cards": [str(c) for c in p.hole_cards],
-                    "chips_after": p.chips,
+                    "chips_after": chips_end[p.name],
                 }
                 for p in state.players
             ],
@@ -500,7 +515,7 @@ def create_app(config: dict):
 
         payload = {
             "state": session.engine.get_state_snapshot(reveal_all=True),
-            "result": result,
+            "result": {**result, "chips_end": chips_end},
         }
         socketio.emit("hand_result", payload, room=client_id)
         return payload
@@ -659,6 +674,28 @@ def create_app(config: dict):
         except TimeoutError:
             sio.emit("run_it_twice_ai_failed", {}, room=client_id)
 
+    def _handle_allin_runout_bg(sio, session: GameSession, client_id: str) -> None:
+        """Step-by-step all-in runout: deal one street at a time with 3s pauses."""
+        while True:
+            with session.lock:
+                step_result = session.engine.step_runout()
+                snap = session.engine.get_state_snapshot()
+
+            snap["current_player_idx"] = -1
+            sio.emit("state_update", {
+                "state": snap,
+                "valid_actions": [],
+                "street_changed": True,
+            }, room=client_id)
+
+            time.sleep(3)
+
+            if step_result["done"]:
+                with session.lock:
+                    result = session.engine.settle_runout()
+                _finalize_hand(session, client_id, result)
+                return
+
     def _process_ai_turns(sio, session: GameSession, client_id: str) -> None:
         # Guard: only one _process_ai_turns task at a time per session
         with session.lock:
@@ -744,15 +781,34 @@ def create_app(config: dict):
                     _handle_run_it_twice_bg(sio, session, client_id)
                     return
 
+                if result.get("all_in_runout"):
+                    _handle_allin_runout_bg(sio, session, client_id)
+                    return
+
+                street_changed = result.get("street_changed", False)
+
                 with session.lock:
                     if result["hand_over"]:
                         _finalize_hand(session, client_id, result)
                         return
 
+                    if street_changed:
+                        snap = session.engine.get_state_snapshot()
+                        snap["current_player_idx"] = -1
+                        sio.emit("state_update", {
+                            "state": snap,
+                            "valid_actions": [],
+                            "street_changed": True,
+                        }, room=client_id)
+
+                if street_changed:
+                    time.sleep(3)
+
+                with session.lock:
                     sio.emit("state_update", {
                         "state": session.engine.get_state_snapshot(),
                         "valid_actions": session.engine.get_valid_actions_dict(),
-                        "street_changed": result.get("street_changed", False),
+                        "street_changed": street_changed,
                     }, room=client_id)
         finally:
             with session.lock:

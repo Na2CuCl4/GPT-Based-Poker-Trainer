@@ -9,7 +9,7 @@
 - **多 AI 对手**：2~5 名，每人可独立配置风格（紧凶 TAG / 松凶 LAG / 紧弱 / 松弱 / 均衡 GTO / 随机）
 - **实时提示**：点击"💡 建议"，AI 教练即时给出推荐动作、加注额、置信度及分析
 - **赛后分析**：每手结束后 AI 对本手牌局打分并给出改进建议
-- **双次发牌（Run-It-Twice）**：双方全押时可选择是否发两次以降低方差，AI 对手同样会做出决策
+- **两次发牌（Run-It-Twice）**：双方全押时可选择是否发两次以降低方差，AI 对手同样会做出决策
 - **可视化牌桌**：椭圆形牌桌，玩家座位圆弧分布，当前行动者高亮
 - **游戏配置**：所有参数均可在浏览器配置弹窗中调整，无需重启服务器
 - **筹码调整**：可实时修改玩家和 AI 对手的当前筹码
@@ -26,7 +26,7 @@
 |----|------|
 | 后端 | Python 3.10+，Flask，Flask-SocketIO，Eventlet |
 | AI | OpenAI GPT API，Pydantic schema 结构化输出 |
-| 牌局引擎 | 纯 Python，支持边池、全押、双次发牌 |
+| 牌局引擎 | 纯 Python，支持边池、全押、两次发牌 |
 | 牌力评估 | [treys](https://github.com/ihendley/treys) |
 | 前端 | 原生 JS，Socket.IO 客户端，CSS 变量 |
 | 生产服务器 | Gunicorn + Eventlet worker |
@@ -42,7 +42,7 @@ poker-ai/
 ├── game_config.yaml     # 服务端默认配置
 ├── requirements.txt
 ├── poker/               # 牌局引擎
-│   ├── game_engine.py   # 状态机：发牌、下注、结算、双次发牌
+│   ├── game_engine.py   # 状态机：发牌、下注、结算、两次发牌
 │   ├── game_state.py    # 数据类：GameState, PlayerState
 │   ├── hand_evaluator.py
 │   ├── card.py
@@ -132,7 +132,7 @@ training:
     - loose_aggressive
 
 features:
-  run_it_twice: true    # 双方全押时是否提供双次发牌选项
+  run_it_twice: true    # 双方全押时是否提供两次发牌选项
   four_color_deck: true # true: 梅花绿色 + 方块蓝色；false: 传统双色（红 / 黑）
 
 auth:
@@ -154,7 +154,7 @@ auth:
 | 牌桌 | AI 对手数量、初始筹码、最大筹码上限 |
 | 盲注 | 小盲、大盲、前注 |
 | 训练功能 | 实时提示、赛后分析、显示对手风格 |
-| 功能 | 双次发牌、绿色梅花 / 蓝色方块（四色牌）|
+| 功能 | 两次发牌、绿色梅花 / 蓝色方块（四色牌）|
 | 玩家的筹码与风格 | 各玩家当前筹码（立即生效）、各 AI 对手风格 |
 
 修改筹码并保存后，若当前有进行中的游戏，筹码会立即更新到桌面；若无游戏，保存的筹码将在下次"开始游戏"时作为初始值。
@@ -186,8 +186,8 @@ auth:
 | POST | `/api/game/next-hand` | 开始下一手 |
 | POST | `/api/game/hint` | 请求实时操作建议 |
 | POST | `/api/game/analyze` | 请求赛后牌局分析 |
-| POST | `/api/game/run-it-twice` | 提交双次发牌决定 |
-| POST | `/api/game/run-it-twice-hint` | 请求双次发牌建议 |
+| POST | `/api/game/run-it-twice` | 提交两次发牌决定 |
+| POST | `/api/game/run-it-twice-hint` | 请求两次发牌建议 |
 
 WebSocket 事件由 Flask-SocketIO 推送：`state_update`、`hand_result`、`rit_request`。
 
