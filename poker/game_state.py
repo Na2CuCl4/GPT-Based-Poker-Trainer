@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Literal
 
 from poker.card import Card
 

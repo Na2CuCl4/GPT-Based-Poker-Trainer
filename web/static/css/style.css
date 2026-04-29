@@ -603,20 +603,6 @@ body {
 }
 .retry-btn-seat:hover { background: #3a5068; }
 
-/* Retry button (inside action log) */
-.retry-btn {
-  margin-left: 8px;
-  padding: 2px 8px;
-  font-size: 0.78rem;
-  background: #2d3f55;
-  color: #74b9ff;
-  border: 1px solid #74b9ff;
-  border-radius: 4px;
-  cursor: pointer;
-  pointer-events: all;
-}
-.retry-btn:hover { background: #3a5068; }
-
 /* =========================================================
    Portrait mode (aspect-ratio < 1): highlight cards, not seat border
    ========================================================= */

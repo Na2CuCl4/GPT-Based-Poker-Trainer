@@ -1,9 +1,6 @@
 """GPT client — wraps Azure OpenAI Responses API (same pattern as test_gpt.py)."""
 from __future__ import annotations
 
-import os
-import random
-import time
 import threading
 from typing import Type, TypeVar
 
@@ -46,8 +43,6 @@ def parse_response(system_prompt: str, user_prompt: str, schema: Type[T], timeou
     error: list = [None]
 
     def _call() -> None:
-        # if os.environ.get("DEV"):
-        #     time.sleep(random.uniform(0, 3))
         try:
             response = _client.responses.parse(
                 model=model,

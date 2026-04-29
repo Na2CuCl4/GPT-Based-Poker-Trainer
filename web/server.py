@@ -271,7 +271,10 @@ def create_app(config: dict):
 
         data = request.get_json()
         action = data.get("action")
-        amount = int(data.get("amount", 0))
+        try:
+            amount = int(data.get("amount") or 0)
+        except (ValueError, TypeError):
+            return jsonify({"error": "无效的下注金额"}), 400
 
         with session.lock:
             current_p = session.engine.state.players[session.engine.state.current_player_idx]
@@ -520,7 +523,7 @@ def create_app(config: dict):
         try:
             analysis: HandAnalysis = advisor.analyze_hand(hand_data, timeout=timeout)
             socketio.emit("hand_analysis", {"analysis": analysis.model_dump()}, room=client_id)
-        except TimeoutError:
+        except Exception:
             socketio.emit("hand_analysis_failed", {}, room=client_id)
 
     def _handle_hand_over(session: GameSession, client_id: str, result: dict):
@@ -669,7 +672,7 @@ def create_app(config: dict):
                 "ai_run_twice": decision.run_twice,
                 "ai_reasoning": decision.reasoning,
             }, room=client_id)
-        except TimeoutError:
+        except Exception:
             sio.emit("run_it_twice_ai_failed", {}, room=client_id)
 
     def _handle_rit_runout_bg(sio, session: GameSession, client_id: str) -> None:
@@ -787,7 +790,7 @@ def create_app(config: dict):
                 sio.emit("ai_thinking", {"player_name": player_name}, room=client_id)
                 try:
                     decision = opponent.decide(state, current_p, valid, timeout=action_timeout)
-                except TimeoutError:
+                except Exception:
                     session.ai_retry_pending = True
                     sio.emit("ai_action_failed", {
                         "player_name": player_name,
