@@ -700,8 +700,8 @@ class GameEngine:
             prev = level
         return side_pots
 
-    def get_state_snapshot(self, reveal_all: bool = False) -> dict:
-        return self.state.to_dict(reveal_all=reveal_all)
+    def get_state_snapshot(self, reveal_all: bool = False, reveal_folded: bool = False) -> dict:
+        return self.state.to_dict(reveal_all=reveal_all, reveal_folded=reveal_folded)
 
     def get_valid_actions_dict(self) -> list[dict]:
         return [a.to_dict() for a in self.get_valid_actions()]

@@ -546,7 +546,7 @@ def create_app(config: dict):
         session.pending_analysis = {"hand_data": hand_data}
 
         payload = {
-            "state": session.engine.get_state_snapshot(reveal_all=True),
+            "state": session.engine.get_state_snapshot(reveal_all=True, reveal_folded=True),
             "result": {**result, "chips_end": chips_end},
         }
         socketio.emit("hand_result", payload, room=client_id)

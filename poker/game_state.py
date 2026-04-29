@@ -29,16 +29,22 @@ class PlayerState:
     def is_active(self) -> bool:
         return not self.is_folded and not self.is_all_in
 
-    def to_dict(self, reveal_cards: bool = False) -> dict:
+    def to_dict(self, reveal_cards: bool = False, reveal_folded: bool = False) -> dict:
+        if reveal_cards:
+            if self.is_folded and not self.is_human and not reveal_folded:
+                cards = [None] * len(self.hole_cards)
+            else:
+                cards = [c.to_dict() for c in self.hole_cards]
+        else:
+            cards = [c.to_dict() for c in self.hole_cards] if self.is_human \
+                    else [None] * len(self.hole_cards)
         return {
             "idx": self.idx,
             "name": self.name,
             "chips": self.chips,
             "is_human": self.is_human,
             "style": self.style,
-            "hole_cards": [c.to_dict() for c in self.hole_cards] if reveal_cards else (
-                [c.to_dict() for c in self.hole_cards] if self.is_human else [None] * len(self.hole_cards)
-            ),
+            "hole_cards": cards,
             "current_bet": self.current_bet,
             "total_bet": self.total_bet,
             "is_folded": self.is_folded,
@@ -75,12 +81,13 @@ class GameState:
             "amount": amount,
         })
 
-    def to_dict(self, reveal_all: bool = False) -> dict:
+    def to_dict(self, reveal_all: bool = False, reveal_folded: bool = False) -> dict:
         return {
             "street": self.street,
             "pot": self.pot,
             "community_cards": [c.to_dict() for c in self.community_cards],
-            "players": [p.to_dict(reveal_cards=reveal_all) for p in self.players],
+            "players": [p.to_dict(reveal_cards=reveal_all, reveal_folded=reveal_folded)
+                        for p in self.players],
             "current_player_idx": self.current_player_idx,
             "dealer_idx": self.dealer_idx,
             "hand_number": self.hand_number,
