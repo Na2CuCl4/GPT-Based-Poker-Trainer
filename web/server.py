@@ -679,11 +679,11 @@ def create_app(config: dict):
             while True:
                 with session.lock:
                     step = session.engine.step_runout()
-                    snap = session.engine.get_state_snapshot()
+                    snap = session.engine.get_state_snapshot(reveal_all=True)
                 snap["current_player_idx"] = -1
                 snap["center_label"] = label
                 sio.emit("state_update", {
-                    "state": snap, "valid_actions": [], "street_changed": True,
+                    "state": snap, "valid_actions": [], "street_changed": True, "reveal_all": True,
                 }, room=client_id)
                 time.sleep(3)
                 if step["done"]:
@@ -692,10 +692,10 @@ def create_app(config: dict):
         with session.lock:
             session.engine.prepare_run_twice()
 
-        snap = session.engine.get_state_snapshot()
+        snap = session.engine.get_state_snapshot(reveal_all=True)
         snap["current_player_idx"] = -1
         snap["center_label"] = "第一次发牌"
-        sio.emit("state_update", {"state": snap, "valid_actions": [], "street_changed": True}, room=client_id)
+        sio.emit("state_update", {"state": snap, "valid_actions": [], "street_changed": True, "reveal_all": True}, room=client_id)
         time.sleep(1)
 
         deal_one_run("第一次发牌")
@@ -703,10 +703,10 @@ def create_app(config: dict):
         with session.lock:
             session.engine.reset_for_run2()
 
-        snap = session.engine.get_state_snapshot()
+        snap = session.engine.get_state_snapshot(reveal_all=True)
         snap["current_player_idx"] = -1
         snap["center_label"] = "第二次发牌"
-        sio.emit("state_update", {"state": snap, "valid_actions": [], "street_changed": True}, room=client_id)
+        sio.emit("state_update", {"state": snap, "valid_actions": [], "street_changed": True, "reveal_all": True}, room=client_id)
         time.sleep(1)
 
         deal_one_run("第二次发牌")
@@ -716,17 +716,26 @@ def create_app(config: dict):
         _finalize_hand(session, client_id, result)
 
     def _handle_allin_runout_bg(sio, session: GameSession, client_id: str) -> None:
-        """Step-by-step all-in runout: deal one street at a time with 3s pauses."""
+        """Step-by-step all-in runout: reveal hands, then deal one street at a time with 3s pauses."""
+        with session.lock:
+            snap = session.engine.get_state_snapshot(reveal_all=True)
+        snap["current_player_idx"] = -1
+        sio.emit("state_update", {
+            "state": snap, "valid_actions": [], "street_changed": False, "reveal_all": True,
+        }, room=client_id)
+        time.sleep(1)
+
         while True:
             with session.lock:
                 step_result = session.engine.step_runout()
-                snap = session.engine.get_state_snapshot()
+                snap = session.engine.get_state_snapshot(reveal_all=True)
 
             snap["current_player_idx"] = -1
             sio.emit("state_update", {
                 "state": snap,
                 "valid_actions": [],
                 "street_changed": True,
+                "reveal_all": True,
             }, room=client_id)
 
             time.sleep(3)

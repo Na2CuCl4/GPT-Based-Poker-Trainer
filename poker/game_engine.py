@@ -136,7 +136,12 @@ class GameEngine:
                 p.chips -= amount
                 p.total_bet += amount
                 s.pot += amount
-                s.log_action(p.name, "ante", amount)
+                if p.chips == 0:
+                    p.is_all_in = True
+                    p.last_action = "all_in"
+                    s.log_action(p.name, "all_in", p.total_bet)
+                else:
+                    s.log_action(p.name, "ante", amount)
 
         # Post blinds
         n = len(s.players)
@@ -149,10 +154,18 @@ class GameEngine:
             bb_idx = self._next_active_idx(sb_idx)
 
         self._post_blind(s.players[sb_idx], s.small_blind)
-        s.log_action(s.players[sb_idx].name, "small_blind", s.small_blind)
+        if s.players[sb_idx].is_all_in:
+            s.players[sb_idx].last_action = "all_in"
+            s.log_action(s.players[sb_idx].name, "all_in", s.players[sb_idx].total_bet)
+        else:
+            s.log_action(s.players[sb_idx].name, "small_blind", s.small_blind)
 
         self._post_blind(s.players[bb_idx], s.big_blind)
-        s.log_action(s.players[bb_idx].name, "big_blind", s.big_blind)
+        if s.players[bb_idx].is_all_in:
+            s.players[bb_idx].last_action = "all_in"
+            s.log_action(s.players[bb_idx].name, "all_in", s.players[bb_idx].total_bet)
+        else:
+            s.log_action(s.players[bb_idx].name, "big_blind", s.big_blind)
 
         s.current_max_bet = s.big_blind
         s.min_raise = s.big_blind

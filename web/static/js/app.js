@@ -47,6 +47,7 @@ let validActions = [];
 let raiseMin = 0, raiseMax = 1000;
 let _currentHandActions = [];
 let _aiRetryPlayerIdx = null;
+let _communityCardCount = 0;
 
 // ---------------------------------------------------------------------------
 // localStorage helpers
@@ -140,11 +141,11 @@ function initSocket() {
 
   socket.on("connect", () => socket.emit("join_session", { client_id: CLIENT_ID }));
 
-  socket.on("state_update", ({ state, valid_actions, street_changed }) => {
+  socket.on("state_update", ({ state, valid_actions, street_changed, reveal_all }) => {
     _aiRetryPlayerIdx = null;
     gameState = state;
     validActions = valid_actions;
-    renderTable(state);
+    renderTable(state, !!reveal_all, !!street_changed);
     if (isHumanTurn(state)) {
       updateActions(valid_actions);
     } else {
@@ -268,6 +269,9 @@ async function startSession() {
     setActionButtonsEnabled(false);
   }
   logStreet(data.state.street);
+  (data.state?.players || []).forEach(p => {
+    if (p.is_all_in) addLog(p.is_human ? "你" : p.name, "all_in", p.total_bet);
+  });
   document.getElementById("hint-panel").style.display = "none";
 }
 
@@ -290,6 +294,9 @@ async function nextHand() {
     setActionButtonsEnabled(false);
   }
   logStreet(data.state.street);
+  (data.state?.players || []).forEach(p => {
+    if (p.is_all_in) addLog(p.is_human ? "你" : p.name, "all_in", p.total_bet);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -318,8 +325,12 @@ async function sendAction(action, amount = 0) {
     return;
   }
 
-  addLog("你", action, amount);
-  _currentHandActions.push({ street: gameState?.street, action, amount });
+  // Normalize: if the engine put the human all-in, log "all_in" regardless of submitted action
+  const humanSnap = data.state?.players?.find(p => p.is_human);
+  const logAction = (humanSnap?.is_all_in && action !== "all_in") ? "all_in" : action;
+  const logAmount = humanSnap?.is_all_in ? (humanSnap.last_action_amount ?? amount) : amount;
+  addLog("你", logAction, logAmount);
+  _currentHandActions.push({ street: gameState?.street, action: logAction, amount: logAmount });
 
   if (data.run_it_twice_pending) {
     // Waiting for run-it-twice socket event — keep buttons disabled
@@ -331,6 +342,8 @@ async function sendAction(action, amount = 0) {
 
   if (data.result?.hand_over) {
     // hand_result will arrive via socket
+  } else if (data.result?.all_in_runout) {
+    // state_update socket events drive the runout animation; don't render stale state here
   } else {
     gameState = data.state;
     validActions = data.valid_actions;
@@ -401,12 +414,12 @@ const STYLE_CN = {
   tight_passive: "紧弱", loose_passive: "松弱", balanced: "均衡",
 };
 
-function renderTable(state, revealAll = false) {
+function renderTable(state, revealAll = false, animateCommunity = false) {
   document.getElementById("pot-amount").textContent = state.pot;
   document.getElementById("street-label").textContent =
     state.center_label || STREET_CN[state.street] || state.street;
 
-  renderCommunityCards(state.community_cards);
+  renderCommunityCards(state.community_cards, animateCommunity);
 
   const human = state.players.find(p => p.is_human);
   const humanTurn = human && state.current_player_idx === human.idx && state.street !== "showdown";
@@ -418,7 +431,9 @@ function renderTable(state, revealAll = false) {
     const dealerMark = isDealer ? `<span class="dealer-btn">D</span>` : "";
     let actionBadge = "";
     if (!human.is_folded && state.street !== "showdown") {
-      if (humanTurn) {
+      if (human.is_all_in) {
+        actionBadge = `<span class="seat-action-badge">全押</span>`;
+      } else if (humanTurn) {
         actionBadge = `<span class="folded-label">思考中…</span>`;
       } else if (!human.last_action) {
         actionBadge = `<span class="folded-label">等待操作</span>`;
@@ -448,10 +463,20 @@ function renderTable(state, revealAll = false) {
   renderOpponents(state.players, state.dealer_idx, state.current_player_idx, revealAll);
 }
 
-function renderCommunityCards(cards) {
+function renderCommunityCards(cards, animateNew = false) {
+  const prevCount = _communityCardCount;
+  _communityCardCount = (cards || []).length;
   const el = document.getElementById("community-cards");
   el.innerHTML = "";
-  (cards || []).forEach(c => { el.innerHTML += cardHtml(c, true); });
+  (cards || []).forEach((c, i) => {
+    const isNew = animateNew && i >= prevCount;
+    const delay = isNew ? (i - prevCount) * 0.15 : 0;
+    const animStyle = isNew ? ` style="animation: dealIn 0.4s ease-out ${delay}s both"` : "";
+    const color = cardColor(c);
+    const rank = c.rank === "T" ? "10" : c.rank;
+    const suit = suitUnicode(c.suit);
+    el.innerHTML += `<div class="card ${color}"${animStyle}><span class="card-rank">${rank}</span><span class="card-suit">${suit}</span></div>`;
+  });
   for (let i = (cards || []).length; i < 5; i++) {
     el.innerHTML += `<div class="card-placeholder"></div>`;
   }
@@ -511,6 +536,8 @@ function renderOpponents(players, dealerIdx, currentPlayerIdx, revealAll) {
     } else {
       if (p.is_folded || gameState?.street === "showdown") {
         actionBadge = "";
+      } else if (p.is_all_in) {
+        actionBadge = `<span class="seat-action-badge">全押</span>`;
       } else if (isCurrent) {
         actionBadge = `<span class="folded-label">思考中…</span>`;
       } else if (!p.last_action) {
