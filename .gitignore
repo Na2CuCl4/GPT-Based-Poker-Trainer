@@ -9,3 +9,7 @@ config/game_config.yaml
 
 # Secret Keys
 .secret_key
+
+# Password store
+passwords.json
+passwords.tmp

@@ -129,6 +129,7 @@ class GPTAdvisor:
         player: PlayerState,
         valid_actions: list[ActionOption],
         timeout: float = 20.0,
+        on_usage=None,
     ) -> HintRecommendation:
         user_prompt = _build_hint_prompt(state, player, valid_actions, self.show_styles)
         try:
@@ -137,6 +138,7 @@ class GPTAdvisor:
                 user_prompt=user_prompt,
                 schema=HintRecommendation,
                 timeout=timeout,
+                on_usage=on_usage,
             )
         except TimeoutError:
             raise
@@ -149,7 +151,7 @@ class GPTAdvisor:
                 pot_odds_note="",
             )
 
-    def analyze_hand(self, hand_result: dict, timeout: float = 60.0) -> HandAnalysis:
+    def analyze_hand(self, hand_result: dict, timeout: float = 60.0, on_usage=None) -> HandAnalysis:
         user_prompt = _build_analysis_prompt(hand_result)
         try:
             return gpt_client.parse_response(
@@ -157,6 +159,7 @@ class GPTAdvisor:
                 user_prompt=user_prompt,
                 schema=HandAnalysis,
                 timeout=timeout,
+                on_usage=on_usage,
             )
         except TimeoutError:
             raise
@@ -174,6 +177,7 @@ class GPTAdvisor:
         state: GameState,
         player: PlayerState,
         timeout: float = 20.0,
+        on_usage=None,
     ) -> RunItTwiceDecision:
         board = [str(c) for c in state.community_cards]
         hole = [str(c) for c in player.hole_cards]
@@ -195,6 +199,7 @@ class GPTAdvisor:
                 user_prompt=json.dumps(data, ensure_ascii=False),
                 schema=RunItTwiceDecision,
                 timeout=timeout,
+                on_usage=on_usage,
             )
         except TimeoutError:
             raise

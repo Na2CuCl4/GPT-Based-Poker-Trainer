@@ -17,6 +17,7 @@ from ai import gpt_client
 from ai.advisor import GPTAdvisor
 from ai.opponent import GPTOpponent
 from ai.schemas import HandAnalysis
+from auth import PasswordStore
 from poker.game_engine import GameEngine
 
 # ---------------------------------------------------------------------------
@@ -40,6 +41,7 @@ class GameSession:
     last_active: float = field(default_factory=time.time)
     ai_retry_pending: bool = False
     ai_processing: bool = False
+    password_key: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +50,7 @@ class GameSession:
 _sessions: dict[str, GameSession] = {}
 _sessions_lock = Lock()
 _config: dict = {}
+_password_store = PasswordStore(Path(__file__).parent.parent / "passwords.json")
 
 
 def _get_secret_key() -> str:
@@ -62,9 +65,6 @@ def _get_secret_key() -> str:
 def create_app(config: dict):
     global _config
     _config = config
-
-    passwords: list = config.get("auth", {}).get("passwords", [])
-    auth_required = bool(passwords)
 
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config["SECRET_KEY"] = _get_secret_key()
@@ -115,6 +115,22 @@ def create_app(config: dict):
                 s.last_active = time.time()
             return s
 
+    def _make_usage_callback(session: GameSession):
+        def _cb(usage) -> None:
+            try:
+                input_t  = usage.input_tokens or 0
+                cached_t = (usage.input_tokens_details.cached_tokens
+                            if usage.input_tokens_details else 0) or 0
+                output_t = usage.output_tokens or 0
+                _password_store.record_usage(session.password_key, input_t, cached_t, output_t)
+            except Exception:
+                pass
+        return _cb
+
+    def _is_over_budget(session: GameSession) -> bool:
+        pricing = _config.get("ai", {}).get("pricing", {})
+        return _password_store.is_over_budget(session.password_key, pricing)
+
     # ------------------------------------------------------------------
     # Auth
     # ------------------------------------------------------------------
@@ -122,14 +138,14 @@ def create_app(config: dict):
     def require_auth(f):
         @wraps(f)
         def decorated(*args, **kwargs):
-            if auth_required and not flask_session.get("authenticated"):
+            if _password_store.has_passwords() and not flask_session.get("authenticated"):
                 return jsonify({"error": "未授权"}), 401
             return f(*args, **kwargs)
         return decorated
 
     @app.route("/api/auth/status", methods=["GET"])
     def api_auth_status():
-        if not auth_required:
+        if not _password_store.has_passwords():
             return jsonify({"authenticated": True, "required": False})
         return jsonify({
             "authenticated": bool(flask_session.get("authenticated")),
@@ -139,9 +155,10 @@ def create_app(config: dict):
     @app.route("/api/auth", methods=["POST"])
     def api_auth():
         pwd = (request.get_json() or {}).get("password", "")
-        if pwd in passwords:
+        if _password_store.authenticate(pwd):
             flask_session.permanent = True
             flask_session["authenticated"] = True
+            flask_session["password_key"] = pwd
             return jsonify({"ok": True})
         return jsonify({"error": "密码错误"}), 401
 
@@ -218,7 +235,8 @@ def create_app(config: dict):
             if not p.is_human
         }
         session = GameSession(engine=engine, advisor=advisor, opponents=opponents,
-                              show_styles=user_show_styles)
+                              show_styles=user_show_styles,
+                              password_key=flask_session.get("password_key", ""))
 
         with _sessions_lock:
             _sessions[client_id] = session
@@ -377,8 +395,13 @@ def create_app(config: dict):
         if human is None:
             return jsonify({"error": "找不到玩家"}), 400
         hint_timeout = _config.get("ai", {}).get("hint_timeout", 20)
+        if _is_over_budget(session):
+            from ai.schemas import RunItTwiceDecision
+            return jsonify(RunItTwiceDecision(run_twice=False, reasoning="当前密码的额度已用尽").model_dump())
         try:
-            advice = session.advisor.advise_run_it_twice(state, human, timeout=hint_timeout)
+            advice = session.advisor.advise_run_it_twice(
+                state, human, timeout=hint_timeout, on_usage=_make_usage_callback(session)
+            )
         except TimeoutError:
             return jsonify({"error": "获取建议超时，请重试", "is_timeout": True}), 504
         return jsonify(advice.model_dump())
@@ -399,8 +422,17 @@ def create_app(config: dict):
             return jsonify({"error": "找不到玩家"}), 400
         valid = session.engine.get_valid_actions()
         hint_timeout = _config.get("ai", {}).get("hint_timeout", 20)
+        if _is_over_budget(session):
+            from ai.schemas import HintRecommendation
+            return jsonify(HintRecommendation(
+                action="check", confidence="低",
+                explanation="当前密码的额度已用尽",
+                hand_strength_desc="", pot_odds_note="",
+            ).model_dump())
         try:
-            hint = session.advisor.get_hint(state, human, valid, timeout=hint_timeout)
+            hint = session.advisor.get_hint(
+                state, human, valid, timeout=hint_timeout, on_usage=_make_usage_callback(session)
+            )
         except TimeoutError:
             return jsonify({"error": "获取建议超时，请重试", "is_timeout": True}), 504
         return jsonify(hint.model_dump())
@@ -440,7 +472,7 @@ def create_app(config: dict):
         analysis_timeout = _config.get("ai", {}).get("analysis_timeout", 60)
         socketio.start_background_task(
             _run_analysis_bg,
-            session.advisor,
+            session,
             session.pending_analysis["hand_data"],
             client_id,
             analysis_timeout,
@@ -453,7 +485,7 @@ def create_app(config: dict):
 
     @socketio.on("connect")
     def on_connect():
-        if auth_required and not flask_session.get("authenticated"):
+        if _password_store.has_passwords() and not flask_session.get("authenticated"):
             return False
 
     @socketio.on("join_session")
@@ -520,9 +552,17 @@ def create_app(config: dict):
         socketio.emit("hand_result", payload, room=client_id)
         return payload
 
-    def _run_analysis_bg(advisor: GPTAdvisor, hand_data: dict, client_id: str, timeout: float = 60.0) -> None:
+    def _run_analysis_bg(session: GameSession, hand_data: dict, client_id: str, timeout: float = 60.0) -> None:
+        if _is_over_budget(session):
+            socketio.emit("hand_analysis", {"analysis": HandAnalysis(
+                overall_score=0, summary="当前密码的额度已用尽，跳过本局分析。",
+                key_decision_evals=[], main_lesson="", tips=[],
+            ).model_dump()}, room=client_id)
+            return
         try:
-            analysis: HandAnalysis = advisor.analyze_hand(hand_data, timeout=timeout)
+            analysis: HandAnalysis = session.advisor.analyze_hand(
+                hand_data, timeout=timeout, on_usage=_make_usage_callback(session)
+            )
             socketio.emit("hand_analysis", {"analysis": analysis.model_dump()}, room=client_id)
         except Exception:
             socketio.emit("hand_analysis_failed", {}, room=client_id)
@@ -556,8 +596,21 @@ def create_app(config: dict):
                 sio.emit("ai_thinking", {"player_name": p.name}, room=client_id)
                 while True:
                     session.rit_ai_retry_event.clear()
+                    if _is_over_budget(session):
+                        sio.emit("ai_action_failed", {
+                            "player_name": p.name, "player_idx": p.idx,
+                            "retry_type": "rit", "message": "当前密码的额度已用尽",
+                        }, room=client_id)
+                        signalled = session.rit_ai_retry_event.wait(timeout=300)
+                        if not signalled:
+                            ai_run_twice = False
+                            break
+                        continue
                     try:
-                        decision = opponent.decide_run_it_twice(state, p, timeout=action_timeout)
+                        decision = opponent.decide_run_it_twice(
+                            state, p, timeout=action_timeout,
+                            on_usage=_make_usage_callback(session),
+                        )
                         sio.emit("ai_action", {
                             "player_name": p.name,
                             "action": "run_twice_decision",
@@ -613,7 +666,10 @@ def create_app(config: dict):
             if opponent:
                 sio.emit("ai_thinking", {"player_name": ai_player.name}, room=client_id)
                 try:
-                    decision = opponent.decide_run_it_twice(state, ai_player, timeout=action_timeout)
+                    decision = opponent.decide_run_it_twice(
+                        state, ai_player, timeout=action_timeout,
+                        on_usage=_make_usage_callback(session),
+                    )
                     with session.rit_lock:
                         session.rit_ai_run_twice = decision.run_twice
                         session.rit_ai_decided = True
@@ -665,7 +721,10 @@ def create_app(config: dict):
         if opponent is None:
             return
         try:
-            decision = opponent.decide_run_it_twice(state, ai_player, timeout=action_timeout)
+            decision = opponent.decide_run_it_twice(
+                state, ai_player, timeout=action_timeout,
+                on_usage=_make_usage_callback(session),
+            )
             with session.rit_lock:
                 session.rit_ai_run_twice = decision.run_twice
                 session.rit_ai_decided = True
@@ -789,8 +848,19 @@ def create_app(config: dict):
 
                 # ── 3. GPT call — lock is released ────────────────────────
                 sio.emit("ai_thinking", {"player_name": player_name}, room=client_id)
+                if _is_over_budget(session):
+                    session.ai_retry_pending = True
+                    sio.emit("ai_action_failed", {
+                        "player_name": player_name,
+                        "player_idx": player_idx,
+                        "message": "当前密码的额度已用尽",
+                    }, room=client_id)
+                    return
                 try:
-                    decision = opponent.decide(state, current_p, valid, timeout=action_timeout)
+                    decision = opponent.decide(
+                        state, current_p, valid, timeout=action_timeout,
+                        on_usage=_make_usage_callback(session),
+                    )
                 except Exception:
                     session.ai_retry_pending = True
                     sio.emit("ai_action_failed", {

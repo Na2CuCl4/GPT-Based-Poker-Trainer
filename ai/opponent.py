@@ -96,6 +96,7 @@ class GPTOpponent:
         player: PlayerState,
         valid_actions: list[ActionOption],
         timeout: float = 30.0,
+        on_usage=None,
     ) -> OpponentDecision:
         user_prompt = _build_user_prompt(state, player, valid_actions)
         try:
@@ -104,6 +105,7 @@ class GPTOpponent:
                 user_prompt=user_prompt,
                 schema=OpponentDecision,
                 timeout=timeout,
+                on_usage=on_usage,
             )
         except TimeoutError:
             raise
@@ -119,6 +121,7 @@ class GPTOpponent:
         state: GameState,
         player: PlayerState,
         timeout: float = 30.0,
+        on_usage=None,
     ) -> RunItTwiceDecision:
         board = [str(c) for c in state.community_cards]
         hole = [str(c) for c in player.hole_cards]
@@ -141,6 +144,7 @@ class GPTOpponent:
                 user_prompt=json.dumps(data, ensure_ascii=False),
                 schema=RunItTwiceDecision,
                 timeout=timeout,
+                on_usage=on_usage,
             )
         except TimeoutError:
             raise

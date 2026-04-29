@@ -195,13 +195,15 @@ function initSocket() {
     updateSeatBadge(player_name, "思考中…");
   });
 
-  socket.on("ai_action_failed", ({ player_name, player_idx, retry_type }) => {
-    addLogRaw(`<span class="log-player">${player_name}</span> <span style="color:#ff7675">决策失败</span>`);
+  socket.on("ai_action_failed", ({ player_name, player_idx, retry_type, message }) => {
+    const reason = message || "决策失败";
+    addLogRaw(`<span class="log-player">${player_name}</span> <span style="color:#ff7675">${reason}</span>`);
+    if (message) showToast(message, "error");
     if (retry_type !== "rit") {
       _aiRetryPlayerIdx = player_idx;
       renderTable(gameState);
     } else {
-      updateSeatBadge(player_name, "决策失败");
+      updateSeatBadge(player_name, reason);
     }
   });
 

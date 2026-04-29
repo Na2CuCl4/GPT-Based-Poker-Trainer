@@ -28,11 +28,18 @@ def init(config: dict) -> None:
     )
 
 
-def parse_response(system_prompt: str, user_prompt: str, schema: Type[T], timeout: float = 30.0) -> T:
+def parse_response(
+    system_prompt: str,
+    user_prompt: str,
+    schema: Type[T],
+    timeout: float = 30.0,
+    on_usage=None,
+) -> T:
     """Send a structured-output request and return a parsed Pydantic model.
 
     Raises TimeoutError if the API call does not complete within *timeout* seconds.
     The underlying network thread continues in the background but its result is ignored.
+    If *on_usage* is provided it is called with the response usage object after a successful call.
     """
     if _client is None:
         raise RuntimeError(
@@ -41,6 +48,7 @@ def parse_response(system_prompt: str, user_prompt: str, schema: Type[T], timeou
 
     result: list = [None]
     error: list = [None]
+    usage_box: list = [None]
 
     def _call() -> None:
         try:
@@ -53,6 +61,7 @@ def parse_response(system_prompt: str, user_prompt: str, schema: Type[T], timeou
                 text_format=schema,
             )
             result[0] = response.output_parsed
+            usage_box[0] = response.usage
         except Exception as exc:
             error[0] = exc
 
@@ -64,4 +73,9 @@ def parse_response(system_prompt: str, user_prompt: str, schema: Type[T], timeou
         raise TimeoutError(f"GPT 请求超时（{timeout}s）")
     if error[0] is not None:
         raise error[0]
+    if on_usage and usage_box[0] is not None:
+        try:
+            on_usage(usage_box[0])
+        except Exception:
+            pass
     return result[0]
