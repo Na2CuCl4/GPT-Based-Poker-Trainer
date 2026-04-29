@@ -403,7 +403,8 @@ const STYLE_CN = {
 
 function renderTable(state, revealAll = false) {
   document.getElementById("pot-amount").textContent = state.pot;
-  document.getElementById("street-label").textContent = STREET_CN[state.street] || state.street;
+  document.getElementById("street-label").textContent =
+    state.center_label || STREET_CN[state.street] || state.street;
 
   renderCommunityCards(state.community_cards);
 
@@ -770,10 +771,12 @@ function _buildRunTwiceResultHtml(result) {
     <div style="font-size:0.85rem;color:#55efc4;margin-top:4px">${potSummary(r2)}</div>
   </div>`;
 
-  // Combined winners
+  // Combined winners — per-player totals from _distribute_run_twice
   const pots = result.side_pot_results || [];
-  const totalWinners = pots.length > 0 ? [...new Set(pots.flatMap(p => p.winners))].join("、") : "未知";
-  html += `<div class="result-winner" style="margin-top:12px">🏆 综合结果：${totalWinners}</div>`;
+  const totalSummary = pots.length > 0
+    ? pots.map(p => `${p.winners.join("、")} 赢 ${p.pot_amount}`).join("；")
+    : "未知";
+  html += `<div class="result-winner" style="margin-top:12px">🏆 综合结果：${totalSummary}</div>`;
 
   return html;
 }

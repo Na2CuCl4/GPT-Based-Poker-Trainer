@@ -97,6 +97,8 @@ class GameEngine:
 
     def start_hand(self) -> GameState:
         """Reset and deal a new hand. Returns updated GameState."""
+        self.apply_rebuy_cashout()
+
         s = self.state
         s.hand_number += 1
         s.street = "preflop"
@@ -132,6 +134,7 @@ class GameEngine:
             for p in s.players:
                 amount = min(p.chips, s.ante)
                 p.chips -= amount
+                p.total_bet += amount
                 s.pot += amount
                 s.log_action(p.name, "ante", amount)
 
@@ -220,6 +223,11 @@ class GameEngine:
             else:
                 action, amount = "fold", 0
 
+        # Coerce raise-to-all-in into all_in
+        if action in ("raise", "bet") and amount >= p.current_bet + p.chips:
+            action = "all_in"
+            amount = 0
+
         if action == "fold":
             p.is_folded = True
             p.last_action = "fold"
@@ -288,6 +296,14 @@ class GameEngine:
             p.acted_this_round = True
             s.log_action(p.name, "all_in", all_in_total)
 
+        # Normalize: any action that empties chips is recorded as all_in
+        if p.is_all_in and p.last_action != "all_in":
+            p.last_action = "all_in"
+            p.last_action_amount = p.total_bet
+            if s.hand_log:
+                s.hand_log[-1]["action"] = "all_in"
+                s.hand_log[-1]["amount"] = p.total_bet
+
         # Only one non-folded player → uncontested win
         active_not_folded = [pl for pl in s.players if not pl.is_folded]
         if len(active_not_folded) == 1:
@@ -297,6 +313,7 @@ class GameEngine:
         if self._betting_round_complete():
             active_betting = [pl for pl in s.players if not pl.is_folded and not pl.is_all_in]
             if len(active_betting) <= 1 and len(active_not_folded) >= 2:
+                self._return_uncallable_bets()
                 # All community cards dealt → resolve showdown
                 if len(s.community_cards) >= 5:
                     return self._resolve_showdown()
@@ -343,6 +360,59 @@ class GameEngine:
     def settle_runout(self) -> dict:
         """Resolve showdown after all-in runout streets have been dealt."""
         return self._resolve_showdown()
+
+    def _return_uncallable_bets(self) -> None:
+        """Return uncallable excess to players whose total_bet exceeds opponents' maximum."""
+        non_folded = [p for p in self.state.players if not p.is_folded]
+        if len(non_folded) < 2:
+            return
+        for p in non_folded:
+            other_max = max(q.total_bet for q in non_folded if q.idx != p.idx)
+            excess = p.total_bet - min(p.total_bet, other_max)
+            if excess > 0:
+                p.chips += excess
+                p.total_bet -= excess
+                p.current_bet = max(0, p.current_bet - excess)
+                self.state.pot -= excess
+
+    def prepare_run_twice(self) -> None:
+        """Save base state before step-by-step RIT animation."""
+        s = self.state
+        self._rit_base_community = list(s.community_cards)
+        self._rit_base_street = s.street
+        self._rit_side_pots = self._build_side_pots()
+        self._rit_run1_community: list = []
+        self._rit_run1_results: list = []
+
+    def reset_for_run2(self) -> None:
+        """After run 1 complete: evaluate, save results, reset community for run 2."""
+        s = self.state
+        self._rit_run1_community = [c.to_dict() for c in s.community_cards]
+        self._rit_run1_results = self._evaluate_pots_only(self._rit_side_pots)
+        s.community_cards = list(self._rit_base_community)
+        s.street = self._rit_base_street
+
+    def settle_run_twice(self) -> dict:
+        """Evaluate run 2, distribute chips across both runs, return hand result."""
+        s = self.state
+        run_2_community = [c.to_dict() for c in s.community_cards]
+        run_2_results = self._evaluate_pots_only(self._rit_side_pots)
+        combined = self._distribute_run_twice(self._rit_side_pots, self._rit_run1_results, run_2_results)
+        s.street = "showdown"
+        reveal = {p.name: [c.to_dict() for c in p.hole_cards] for p in s.players if not p.is_folded}
+        return {
+            "hand_over": True,
+            "next_player_idx": -1,
+            "street_changed": True,
+            "run_twice": True,
+            "run_1_community": self._rit_run1_community,
+            "run_2_community": run_2_community,
+            "run_1_results": self._rit_run1_results,
+            "run_2_results": run_2_results,
+            "side_pot_results": combined,
+            "reveal": reveal,
+            "hand_log": list(s.hand_log),
+        }
 
     def apply_rebuy_cashout(self) -> None:
         """Apply rebuy/cashout after a hand ends."""
@@ -508,37 +578,34 @@ class GameEngine:
         run_1_results: list[dict],
         run_2_results: list[dict],
     ) -> list[dict]:
-        """Distribute chips for run-twice: each side pot split equally between two runs."""
-        combined = []
+        """Distribute chips for run-twice; return per-player total chips won."""
+        player_totals: dict[str, int] = {}
         for i, (pot_amount, eligible_players) in enumerate(side_pots):
-            # Run 1 gets ceiling half, run 2 gets floor half (handles odd pots)
             half_1 = (pot_amount + 1) // 2
             half_2 = pot_amount // 2
 
-            r1 = run_1_results[i]
-            r1_winners = [p for p in eligible_players if p.name in r1["winners"]]
+            r1_winners = [p for p in eligible_players if p.name in run_1_results[i]["winners"]]
             if r1_winners:
                 share = half_1 // len(r1_winners)
-                remainder = half_1 - share * len(r1_winners)
+                rem = half_1 - share * len(r1_winners)
                 for j, w in enumerate(r1_winners):
-                    w.chips += share + (remainder if j == 0 else 0)
+                    won = share + (rem if j == 0 else 0)
+                    w.chips += won
+                    player_totals[w.name] = player_totals.get(w.name, 0) + won
 
-            r2 = run_2_results[i]
-            r2_winners = [p for p in eligible_players if p.name in r2["winners"]]
+            r2_winners = [p for p in eligible_players if p.name in run_2_results[i]["winners"]]
             if r2_winners:
                 share = half_2 // len(r2_winners)
-                remainder = half_2 - share * len(r2_winners)
+                rem = half_2 - share * len(r2_winners)
                 for j, w in enumerate(r2_winners):
-                    w.chips += share + (remainder if j == 0 else 0)
+                    won = share + (rem if j == 0 else 0)
+                    w.chips += won
+                    player_totals[w.name] = player_totals.get(w.name, 0) + won
 
-            combined_winner_names = list({*r1["winners"], *r2["winners"]})
-            combined.append({
-                "pot_amount": pot_amount,
-                "winners": combined_winner_names,
-                "hand_name": "",
-            })
-
-        return combined
+        return [
+            {"pot_amount": total, "winners": [name], "hand_name": ""}
+            for name, total in sorted(player_totals.items(), key=lambda x: -x[1])
+        ]
 
     def _resolve_showdown(self) -> dict:
         s = self.state

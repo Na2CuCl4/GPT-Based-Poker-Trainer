@@ -480,11 +480,7 @@ def create_app(config: dict):
     def _finalize_hand(session: GameSession, client_id: str, result: dict) -> dict:
         state = session.engine.state
 
-        # Capture natural post-hand chips before rebuy/cashout (for log net display)
         chips_end = {p.name: p.chips for p in state.players}
-
-        # Apply rebuy/cashout — mutates p.chips and p.chip_adjustment
-        session.engine.apply_rebuy_cashout()
 
         pot_results = result.get("side_pot_results", [])
 
@@ -588,9 +584,10 @@ def create_app(config: dict):
                         ai_run_twice = False
                         break
 
-            with session.lock:
-                result = session.engine.runout(run_twice=ai_run_twice)
-            _finalize_hand(session, client_id, result)
+            if ai_run_twice:
+                _handle_rit_runout_bg(sio, session, client_id)
+            else:
+                _handle_allin_runout_bg(sio, session, client_id)
             return
 
         # ── Human vs AI (human is all-in) ────────────────────────────────
@@ -645,9 +642,10 @@ def create_app(config: dict):
 
         final_run_twice = (human_choice is True) and (ai_run_twice is True)
 
-        with session.lock:
-            result = session.engine.runout(run_twice=final_run_twice)
-        _finalize_hand(session, client_id, result)
+        if final_run_twice:
+            _handle_rit_runout_bg(sio, session, client_id)
+        else:
+            _handle_allin_runout_bg(sio, session, client_id)
 
     def _retry_ai_rit_decision_bg(sio, session: GameSession, client_id: str) -> None:
         """Retry AI run-it-twice decision for human-vs-AI scenario."""
@@ -673,6 +671,49 @@ def create_app(config: dict):
             }, room=client_id)
         except TimeoutError:
             sio.emit("run_it_twice_ai_failed", {}, room=client_id)
+
+    def _handle_rit_runout_bg(sio, session: GameSession, client_id: str) -> None:
+        """Step-by-step run-it-twice animation: two runs dealt street by street."""
+
+        def deal_one_run(label: str) -> None:
+            while True:
+                with session.lock:
+                    step = session.engine.step_runout()
+                    snap = session.engine.get_state_snapshot()
+                snap["current_player_idx"] = -1
+                snap["center_label"] = label
+                sio.emit("state_update", {
+                    "state": snap, "valid_actions": [], "street_changed": True,
+                }, room=client_id)
+                time.sleep(3)
+                if step["done"]:
+                    break
+
+        with session.lock:
+            session.engine.prepare_run_twice()
+
+        snap = session.engine.get_state_snapshot()
+        snap["current_player_idx"] = -1
+        snap["center_label"] = "第一次发牌"
+        sio.emit("state_update", {"state": snap, "valid_actions": [], "street_changed": True}, room=client_id)
+        time.sleep(1)
+
+        deal_one_run("第一次发牌")
+
+        with session.lock:
+            session.engine.reset_for_run2()
+
+        snap = session.engine.get_state_snapshot()
+        snap["current_player_idx"] = -1
+        snap["center_label"] = "第二次发牌"
+        sio.emit("state_update", {"state": snap, "valid_actions": [], "street_changed": True}, room=client_id)
+        time.sleep(1)
+
+        deal_one_run("第二次发牌")
+
+        with session.lock:
+            result = session.engine.settle_run_twice()
+        _finalize_hand(session, client_id, result)
 
     def _handle_allin_runout_bg(sio, session: GameSession, client_id: str) -> None:
         """Step-by-step all-in runout: deal one street at a time with 3s pauses."""
@@ -767,6 +808,18 @@ def create_app(config: dict):
                             action, amount = "check", 0
                         else:
                             action, amount = "fold", 0
+
+                    # Coerce any action that would empty chips into all_in
+                    if action == "call":
+                        call_needed = min(current_p_now.chips,
+                                          state.current_max_bet - current_p_now.current_bet)
+                        if call_needed > 0 and call_needed >= current_p_now.chips:
+                            action = "all_in"
+                            amount = 0
+                    elif action in ("raise", "bet"):
+                        if amount >= current_p_now.current_bet + current_p_now.chips:
+                            action = "all_in"
+                            amount = 0
 
                     sio.emit("ai_action", {
                         "player_name": player_name,
