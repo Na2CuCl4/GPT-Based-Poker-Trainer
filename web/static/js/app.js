@@ -47,6 +47,7 @@ let validActions = [];
 let raiseMin = 0, raiseMax = 1000;
 let _currentHandActions = [];
 let _aiRetryPlayerIdx = null;
+let _usageInfo = null;
 let _communityCardCount = 0;
 
 // ---------------------------------------------------------------------------
@@ -209,6 +210,7 @@ function initSocket() {
 
   socket.on("hand_analysis", ({ analysis }) => {
     appendAnalysisToModal(analysis);
+    fetchUsage();
   });
 
   socket.on("hand_analysis_failed", () => {
@@ -276,6 +278,7 @@ async function startSession() {
     if (p.is_all_in) addLog(p.is_human ? "你" : p.name, "all_in", p.total_bet);
   });
   document.getElementById("hint-panel").style.display = "none";
+  fetchUsage();
 }
 
 async function nextHand() {
@@ -300,6 +303,7 @@ async function nextHand() {
   (data.state?.players || []).forEach(p => {
     if (p.is_all_in) addLog(p.is_human ? "你" : p.name, "all_in", p.total_bet);
   });
+  fetchUsage();
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +587,7 @@ function renderOpponents(players, dealerIdx, currentPlayerIdx, revealAll) {
 function actionCN(action, amount) {
   const map = {
     fold: "弃牌", check: "过牌", call: "跟注",
-    raise: `加注 ${amount}`, all_in: "全押",
+    raise: `加注至 ${amount}`, all_in: "全押",
     small_blind: `小盲 ${amount}`, big_blind: `大盲 ${amount}`, ante: `Ante ${amount}`,
   };
   return map[action] || action;
@@ -875,27 +879,47 @@ async function retryRitAi() {
 // ---------------------------------------------------------------------------
 // Stats (computed client-side from localStorage)
 // ---------------------------------------------------------------------------
+async function fetchUsage() {
+  try {
+    const res = await apiFetch("/api/auth/usage");
+    if (res.ok) _usageInfo = await res.json();
+  } catch (_) {}
+  refreshStats();
+}
+
 function refreshStats() {
   const history = getHandHistory();
   const panel = document.getElementById("stats-panel");
-  if (!history.length) { panel.style.display = "none"; return; }
+  if (!history.length && !_usageInfo) { panel.style.display = "none"; return; }
 
   const n = history.length;
-  const won = history.filter(h => h.won).length;
-  const vpip = history.filter(h =>
-    h.myActions?.some(a => a.street === "preflop" && ["call", "raise", "all_in"].includes(a.action))
-  ).length;
-  const pfr = history.filter(h =>
-    h.myActions?.some(a => a.street === "preflop" && ["raise", "all_in"].includes(a.action))
-  ).length;
-  const pct = v => `${(v * 100).toFixed(1)}%`;
-
-  document.getElementById("stats-content").innerHTML = `
-    <div class="stat-row"><span class="stat-label">胜率</span><span class="stat-value">${pct(won / n)}</span></div>
-    <div class="stat-row"><span class="stat-label">已玩手数</span><span class="stat-value">${n}</span></div>
-    <div class="stat-row"><span class="stat-label">VPIP</span><span class="stat-value">${pct(vpip / n)}</span></div>
-    <div class="stat-row"><span class="stat-label">PFR</span><span class="stat-value">${pct(pfr / n)}</span></div>
-  `;
+  let html = "";
+  if (n > 0) {
+    const won = history.filter(h => h.won).length;
+    const vpip = history.filter(h =>
+      h.myActions?.some(a => a.street === "preflop" && ["call", "raise", "all_in"].includes(a.action))
+    ).length;
+    const pfr = history.filter(h =>
+      h.myActions?.some(a => a.street === "preflop" && ["raise", "all_in"].includes(a.action))
+    ).length;
+    const pct = v => `${(v * 100).toFixed(1)}%`;
+    html += `
+      <div class="stat-row"><span class="stat-label">胜率</span><span class="stat-value">${pct(won / n)}</span></div>
+      <div class="stat-row"><span class="stat-label">已玩手数</span><span class="stat-value">${n}</span></div>
+      <div class="stat-row"><span class="stat-label">VPIP</span><span class="stat-value">${pct(vpip / n)}</span></div>
+      <div class="stat-row"><span class="stat-label">PFR</span><span class="stat-value">${pct(pfr / n)}</span></div>
+    `;
+  }
+  if (_usageInfo) {
+    const limitStr = _usageInfo.daily_limit
+      ? `$${_usageInfo.daily_limit.toFixed(4)}`
+      : "不限制";
+    html += `
+      <div class="stat-row"><span class="stat-label">今日消费</span><span class="stat-value">$${_usageInfo.cost.toFixed(6)}</span></div>
+      <div class="stat-row"><span class="stat-label">日限额</span><span class="stat-value">${limitStr}</span></div>
+    `;
+  }
+  document.getElementById("stats-content").innerHTML = html;
   panel.style.display = "block";
 }
 

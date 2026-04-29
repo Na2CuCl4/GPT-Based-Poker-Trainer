@@ -152,6 +152,18 @@ def create_app(config: dict):
             "required": True,
         })
 
+    @app.route("/api/auth/usage", methods=["GET"])
+    @require_auth
+    def api_auth_usage():
+        pwd = flask_session.get("password_key", "")
+        if not pwd:
+            return jsonify({"cost": 0.0, "daily_limit": 0.0})
+        pricing = _config.get("ai", {}).get("pricing", {})
+        for e in _password_store.get_all(pricing):
+            if e["password"] == pwd:
+                return jsonify({"cost": e["cost"], "daily_limit": e["daily_limit"]})
+        return jsonify({"cost": 0.0, "daily_limit": 0.0})
+
     @app.route("/api/auth", methods=["POST"])
     def api_auth():
         pwd = (request.get_json() or {}).get("password", "")
