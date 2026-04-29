@@ -339,9 +339,10 @@ def create_app(config: dict):
         session = _get_session(client_id)
         if session is None:
             return jsonify({"error": "游戏未开始"}), 400
-        if not session.ai_retry_pending:
-            return jsonify({"error": "无待重试的 AI 操作"}), 400
-        session.ai_retry_pending = False
+        with session.lock:
+            if not session.ai_retry_pending:
+                return jsonify({"error": "无待重试的 AI 操作"}), 400
+            session.ai_retry_pending = False
         socketio.start_background_task(_process_ai_turns, socketio, session, client_id)
         return jsonify({"ok": True})
 

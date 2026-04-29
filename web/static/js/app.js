@@ -247,6 +247,7 @@ async function startSession() {
   hideHint();
   clearLog();
   _currentHandActions = [];
+  _aiRetryPlayerIdx = null;
   document.getElementById("btn-next").style.display = "none";
   document.getElementById("result-modal").style.display = "none";
   document.getElementById("rit-modal").style.display = "none";
@@ -848,12 +849,17 @@ function showNextHandButton() {
 }
 
 async function retryAiAction() {
-  if (_aiRetryPlayerIdx !== null && gameState) {
-    const player = gameState.players.find(p => p.idx === _aiRetryPlayerIdx);
+  const savedIdx = _aiRetryPlayerIdx;
+  if (savedIdx !== null && gameState) {
+    const player = gameState.players.find(p => p.idx === savedIdx);
     _aiRetryPlayerIdx = null;
     if (player) updateSeatBadge(player.name, "思考中…");
   }
-  await apiFetch("/api/game/retry-ai", { method: "POST" });
+  const res = await apiFetch("/api/game/retry-ai", { method: "POST" });
+  if (!res.ok) {
+    _aiRetryPlayerIdx = savedIdx;
+    renderTable(gameState);
+  }
 }
 
 async function retryRitAi() {
